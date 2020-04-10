@@ -2,8 +2,57 @@
 #include <chrono>
 
 // ******* Function Member Implementation *******
+// ***** Instance *****
+Matrix Instance::forward_matrix;	
+void
+Instance::compute_bounding_box(void) {
+    BBox b = bbox;
+    int size = 8;
+    atlas::math::Point p[8];
+
+    p[0] = atlas::math::Point(b.x0, b.y0, b.z0);
+    p[1] = atlas::math::Point(b.x1, b.y0, b.z0);
+    p[2] = atlas::math::Point(b.x0, b.y1, b.z0);
+    p[3] = atlas::math::Point(b.x1, b.y1, b.z0);
+    p[4] = atlas::math::Point(b.x0, b.y0, b.z1);
+    p[5] = atlas::math::Point(b.x1, b.y0, b.z1);
+    p[6] = atlas::math::Point(b.x0, b.y1, b.z1);
+    p[7] = atlas::math::Point(b.x1, b.y1, b.z1);
+
+    //	box = new Box(atlas::math::Point(b.x0, b.y0, b.z0), atlas::math::Point(b.x1, b.y1, b.z1));
+    //	box->set_material(new Phong());
+
+    double minX = kHugeValue, minY = kHugeValue, minZ = kHugeValue;
+    double maxX = -kHugeValue, maxY = -kHugeValue, maxZ = -kHugeValue;
+
+    for (int j = 0; j < size; j++)
+    {
+        // order shouldn't matter here, right?
+        p[j] = forward_matrix * p[j];
+
+        minX = std::min(minX, (double)p[j].x);
+        minY = std::min(minY, (double)p[j].y);
+        minZ = std::min(minZ, (double)p[j].z);
+        maxX = std::max(maxX, (double)p[j].x);
+        maxY = std::max(maxY, (double)p[j].y);
+        maxZ = std::max(maxZ, (double)p[j].z);
+    }
+
+    bbox = BBox(atlas::math::Point(minX, minY, minZ), atlas::math::Point(maxX, maxY, maxZ));
+
+    //	box = new Box(atlas::math::Point(minX, minY, minZ), atlas::math::Point(maxX, maxY, maxZ));
+    //	box->set_material(new Phong());
+    //	Box* bot_ptr = box;
+
+        // reset forward_matrix for next instance to use
+    forward_matrix.set_identity();
+}
+
+
+
 
 // ***** Utility *****
+/*
 ViewPlane::ViewPlane(void)
     : hres(400),
     vres(400),
@@ -78,6 +127,7 @@ void ViewPlane::set_samples(const int n) {
         sampler_ptr = new Regular(1);
     }
 }
+*/
 
 // ***** World *****
 
@@ -147,7 +197,8 @@ ShadeRec World::hit_objects(atlas::math::Ray<atlas::math::Vector> const& ray) {
     Point local_hit_point = { 0,0,0 };
     float tmin = (float)1.0E10;
     int	num_objects = (int) scene.size();
-    for (int j = 0; j < num_objects; j++)
+    for (int j = 0; j < num_objects; j++) {
+
         if (scene[j]->hit(ray, t, sr) && (t < tmin)) {
             sr.hit_an_object = true;
             tmin = (float)t;
@@ -156,6 +207,7 @@ ShadeRec World::hit_objects(atlas::math::Ray<atlas::math::Vector> const& ray) {
             normal = sr.normal;
             local_hit_point = sr.local_hit_point;
         }
+    }
     if (sr.hit_an_object) {
         sr.t = tmin;
         sr.normal = normal;
@@ -278,7 +330,7 @@ bool
 BBox::inside(const atlas::math::Point& p) const {
     return ((p.x > x0&& p.x < x1) && (p.y > y0&& p.y < y1) && (p.z > z0&& p.z < z1));
 };
-
+ 
 
 // ***** Camera function members *****
 Camera::Camera() :
@@ -356,7 +408,7 @@ void Pinhole::renderScene(std::shared_ptr<World> world) const
     Colour L;
     //ViewPlane vp(world->vp);
     Ray<atlas::math::Vector> ray{};
-    //int depth = 0;//vp.max_depth;	
+    int depth = 0; //depth start from 0;	
     world->s /= mZoom;
     ray.o = mEye;
 
@@ -374,10 +426,10 @@ void Pinhole::renderScene(std::shared_ptr<World> world) const
                 //Colour temp = world->tracer_ptr->trace_ray(ray, 0);
                 //printf("Pinhole :(%f,%f,%f)\n", temp.r, temp.g, temp.b);
                 //L += temp;
-                
-                L += world->tracer_ptr->trace_ray(ray, 0);
 
+                L += world->tracer_ptr->trace_ray(ray, depth);
 
+                //printf("L is (%f,%f,%f)\n", L.x, L.y, L.z);
                 //////////////////////////////
                 //ShadeRec trace_data(*world);
                 //trace_data.world = *world;
@@ -781,23 +833,49 @@ int main()
     using atlas::math::Ray;
     using atlas::math::Vector;
 
-    //std::shared_ptr<MultiJittered> MultiSam = std::make_shared<MultiJittered>(4, 30);
-
 
     std::shared_ptr<World> world{ std::make_shared<World>() };
     // provide world data
-    world->width = 600;                 //$$$$$$$$$$$$$$$$$$$$$$$fix this
-    world->height = 600;                //$$$$$$$$$$$$$$$$$$$$$$$fix this
+    world->width = 1000;                 //$$$$$$$$$$$$$$$$$$$$$$$fix this
+    world->height = 1000;                //$$$$$$$$$$$$$$$$$$$$$$$fix this
     world->background = { 0, 0, 0 };
     //world->sampler = std::make_shared<MultiJittered>(49, 83);     //$$$$$$$$$$$$$$$$$$$$$$$fix this
-    //world->sampler = std::make_shared<MultiJittered>(1);         //$$$$$$$$$$$$$$$$$$$$$$$fix this
-    world->sampler = std::make_shared<Regular>(1);        //$$$$$$$$$$$$$$$$$$$$$$$fix this
-
+    //world->sampler = std::make_shared<MultiJittered>(16);         //$$$$$$$$$$$$$$$$$$$$$$$fix this
+    //world->sampler = std::make_shared<Regular>(1);        //$$$$$$$$$$$$$$$$$$$$$$$fix this
+    std::shared_ptr<MultiJittered> MultiSam = std::make_shared<MultiJittered>(36);
+    world->sampler = MultiSam;
+    world->max_depth = 1;
 
 
     //world->tracer_ptr = std::make_shared<RayCast>(world);
     world->tracer_ptr = std::make_shared<AreaLighting>(world);
     //world->tracer_ptr = std::make_shared<Whitted>(world);
+
+
+
+ /****Materials****/
+    // Floor Matt
+    std::shared_ptr<Matte>FloorMat = std::make_shared<Matte>(0.20f, 0.25f, Colour{ 0.3,0.3,0.3 });
+    // Wall Matt
+    std::shared_ptr<Matte>WallMat = std::make_shared<Matte>(0.20f, 0.20f, Colour{ 0.3,0.3,0.5 });
+    // Box Matt
+    std::shared_ptr<Matte>BoxMat = std::make_shared<Matte>(0.20f, 0.08f, Yellow);
+
+    // Floor specular material
+    std::shared_ptr<Phong>FloorSpc = std::make_shared<Phong>();
+    FloorSpc->set_c({ 0.3,0.3,0.3 });//colour
+    FloorSpc->set_ka(0.50f);//Set ambient
+    FloorSpc->set_kd(0.10f);//Set diffuse
+    FloorSpc->set_ks(0.1f); //Set Sepc
+    FloorSpc->set_exp(1.0f);//Set Sepc
+
+    // Wall specular materials
+    std::shared_ptr<Phong>WallSpc = std::make_shared<Phong>();
+    WallSpc->set_c({ 0.2,0.2,0.4 });//colour
+    WallSpc->set_ka(0.50f);//Set ambient
+    WallSpc->set_kd(0.10f);//Set diffuse
+    WallSpc->set_ks(0.0f); //Set Sepc
+    WallSpc->set_exp(0.0f);//Set Sepc
 
     // Red specular material
     std::shared_ptr<Phong>RSpc = std::make_shared<Phong>();
@@ -815,6 +893,14 @@ int main()
     GSpc->set_ks(0.30f); //Set Sepc
     GSpc->set_exp(10.0f);//Set Sepc
 
+    // Blue specular material
+    std::shared_ptr<Phong>BSpc = std::make_shared<Phong>();
+    BSpc->set_c(Blue);//colour
+    BSpc->set_ka(0.25f);//Set ambient
+    BSpc->set_kd(0.10f);//Set diffuse
+    BSpc->set_ks(0.30f); //Set Sepc
+    BSpc->set_exp(10.0f);//Set Sepc
+
     // Yellow specular material
     std::shared_ptr<Phong>YSpc = std::make_shared<Phong>();
     YSpc->set_c(Yellow);//colour
@@ -823,29 +909,188 @@ int main()
     YSpc->set_ks(0.30f); //Set Sepc
     YSpc->set_exp(10.0f);//Set Sepc
 
-    std::shared_ptr<Matte>Matt = std::make_shared<Matte>(0.20f, 0.20f, Colour{ 0.5,0.5,0.5 });
+    // Reflective material
+    std::shared_ptr<Reflective> ReflecR = std::make_shared<Reflective>();
+    ReflecR->set_ka(0.0);
+    ReflecR->set_kd(0.0);
+    ReflecR->set_ks(0.0);
+    ReflecR->set_cd({0,0,0});
+    ReflecR->set_kr(0.9f);
+    ReflecR->set_cr(PaleRed);   
+
+    // Reflective material
+    std::shared_ptr<Reflective> ReflecB = std::make_shared<Reflective>();
+    ReflecB->set_ka(0.0);
+    ReflecB->set_kd(0.0);
+    ReflecB->set_ks(0.0);
+    ReflecB->set_cd({ 0,0,0 });
+    ReflecB->set_kr(0.9f);
+    ReflecB->set_cr(PaleBlue);
+
+    // Reflective material
+    std::shared_ptr<Reflective> ReflecG = std::make_shared<Reflective>();
+    ReflecG->set_ka(0.0);
+    ReflecG->set_kd(0.0);
+    ReflecG->set_ks(0.0);
+    ReflecG->set_cd({ 0,0,0 });
+    ReflecG->set_kr(0.9f);
+    ReflecG->set_cr(PaleGreen);
+
+
+    // Glossy Reflective material
+    std::shared_ptr<GlossyReflector> GlossyR = std::make_shared<GlossyReflector>();
+    float exp = 1000.0;     // roughness, smaller rougher
+    GlossyR->set_samples(25, exp); // Multijittered(num), maptohemisphere(exp)
+    GlossyR->set_ka(0.0f);
+    GlossyR->set_kd(0.0f); 
+    GlossyR->set_ks(0.0f);
+    GlossyR->set_exp(exp);
+    GlossyR->set_cd(PaleRed);
+    GlossyR->set_kr(0.9f);
+    GlossyR->set_exponent(exp);
+    GlossyR->set_cr(PaleRed); // red
+
+
+    // Glossy Reflective material
+    std::shared_ptr<GlossyReflector> GlossyY = std::make_shared<GlossyReflector>(); 
+    GlossyY->set_samples(25, exp);
+    GlossyY->set_ka(0.0);
+    GlossyY->set_kd(0.0);
+    GlossyY->set_ks(0.0);
+    GlossyY->set_exp(exp);
+    GlossyY->set_cd(1.0f, 1.0f, 0.3f);
+    GlossyY->set_kr(0.9f);
+    GlossyY->set_exponent(exp);
+    GlossyY->set_cr(1.0f, 1.0f, 0.3f); // lemon
+
+
+    // Glossy Reflective material
+    std::shared_ptr<GlossyReflector> GlossyB = std::make_shared<GlossyReflector>();
+    GlossyB->set_samples(25, exp);
+    GlossyB->set_ka(0.0);
+    GlossyB->set_kd(0.0);
+    GlossyB->set_ks(0.0);
+    GlossyB->set_exp(exp);
+    GlossyB->set_cd(PaleBlue);
+    GlossyB->set_kr(0.9f);
+    GlossyB->set_exponent(exp);
+    GlossyB->set_cr(PaleBlue); 
+
+
+
+
+
+/****Grid****/
+    bool use_grid = true;
+    Grid* grid_ptr = NULL;
+    if (use_grid) {
+        grid_ptr = new Grid;
+        srand(15);
+    }
+
+ /***Rendering a Mesh here***/
+    //std::shared_ptr<Grid>mesh_grid_ptr = std::make_shared<Grid>(new Mesh);
+    ////mesh_grid_ptr->reverse_mesh_normals();
+    //mesh_grid_ptr->tessellate_flat_sphere(10, 6);
+    //mesh_grid_ptr->setup_cells();
+    //mesh_grid_ptr->setMaterial(GSpc);
+    //std::shared_ptr<Instance> instance = std::make_shared<Instance>(mesh_grid_ptr.get());
+    ////instance->translate({ 0.2,0.2,0.2});
+    //instance->scale(150, 150, 150);
+    //instance->compute_bounding_box();
+    //world->add_object(instance);
+    //world->scene[0]->setMaterial(RSpc);
+ /***Rendered a Mesh***/
+
+///***Set Objects***/
+    std::shared_ptr<Plane> Wall = std::make_shared<Plane>(atlas::math::Point{ 0, 0, -1000 }, atlas::math::Vector{ 0,0,1 });
+    Wall->setMaterial(WallMat);
+    std::shared_ptr<Plane> Floor = std::make_shared<Plane>(atlas::math::Point{ 0, 0, 0 }, atlas::math::Vector{ 0,1,0 });
+    Floor->setMaterial(FloorMat);
+    std::shared_ptr<Sphere> Ball1 = std::make_shared<Sphere>(atlas::math::Point{ 125, 90, 150 }, 90.0f);
+    Ball1->setMaterial(GlossyR);
+    std::shared_ptr<Sphere> Ball2 = std::make_shared<Sphere>(atlas::math::Point{ -230, 85, -130 }, 85.0f);
+    Ball2->setMaterial(GSpc);
+    std::shared_ptr<Sphere> Ball3 = std::make_shared<Sphere>(atlas::math::Point{ 310, 85, -30 }, 85.0f);
+    Ball3->setMaterial(BSpc);
+    std::shared_ptr<Sphere> Ball4 = std::make_shared<Sphere>(atlas::math::Point{ -280, 70, 40 }, 70.0f);
+    Ball4->setMaterial(GlossyB);
+    std::shared_ptr<Sphere> Ball5 = std::make_shared<Sphere>(atlas::math::Point{ 235, 45, 230 }, 45.0f);
+    Ball5->setMaterial(GSpc);
+    std::shared_ptr<Sphere> Ball6 = std::make_shared<Sphere>(atlas::math::Point{ -145, 45, 260 }, 45.0f);
+    Ball6->setMaterial(RSpc);
+    std::shared_ptr<Sphere> Ball7 = std::make_shared<Sphere>(atlas::math::Point{ 30, 50, 270 }, 50.0f);
+    Ball7->setMaterial(YSpc);
+    std::shared_ptr<Cylinder> Cyli1 = std::make_shared<Cylinder>(0.0f, 250.0f, 90.0f);
+    Cyli1->setMaterial(GlossyY);
+    std::shared_ptr<Box> Box1 = std::make_shared<Box>(atlas::math::Point{ 150, 0, -350 }, atlas::math::Point{ 400, 250 ,-100 });
+    Box1->setMaterial(YSpc);
+    std::shared_ptr<Box> Box2 = std::make_shared<Box>(atlas::math::Point{ -550, 0, -400 }, atlas::math::Point{-400, 150 ,-250 });
+    Box2->setMaterial(YSpc);
+    world->add_object(Wall);
+    world->add_object(Floor);
+
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/*****Render without grid****/
+
+    //world->add_object(Ball1);
+    //world->add_object(Ball2);
+    //world->add_object(Ball3);
+    //world->add_object(Ball4);
+    //world->add_object(Ball5);
+    //world->add_object(Ball6);
+    //world->add_object(Ball7);
+    //world->add_object(Cyli1);
+    //world->add_object(Box1);
+    //world->add_object(Box2);
+ 
+
+/*****Render with grid****/
+    std::shared_ptr<Grid>mesh_grid_ptr = std::make_shared<Grid>(new Mesh);
+    //mesh_grid_ptr->reverse_mesh_normals();
+    //mesh_grid_ptr->tessellate_flat_sphere(10, 6);
+    mesh_grid_ptr->add_object(Ball1.get());  
+    mesh_grid_ptr->add_object(Ball2.get());
+    mesh_grid_ptr->add_object(Ball3.get());
+    mesh_grid_ptr->add_object(Ball4.get()); 
+    mesh_grid_ptr->add_object(Ball5.get());
+    mesh_grid_ptr->add_object(Ball6.get());
+    mesh_grid_ptr->add_object(Ball7.get());
+    mesh_grid_ptr->add_object(Cyli1.get());
+    mesh_grid_ptr->add_object(Box1.get());
+    mesh_grid_ptr->add_object(Box2.get());
+    mesh_grid_ptr->setup_cells();
+
+    world->add_object(mesh_grid_ptr);
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   /* std::shared_ptr<Matte>Matt = std::make_shared<Matte>(0.20f, 0.20f, Colour{ 0.5,0.5,0.5 });
     
     world->scene.push_back(
         std::make_shared<Plane>(atlas::math::Point{ 0, 0, -1000 }, atlas::math::Vector{ 0,0,1 }));
-    world->scene[0]->setMaterial(
+    world->scene[1]->setMaterial(
         std::make_shared<Matte>(0.20f, 0.20f, Colour{ 0.2,0.2,0.5 }));
-
+    
     world->scene.push_back(
         std::make_shared<Plane>(atlas::math::Point{ 0, 0, 0 }, atlas::math::Vector{ 0,1,0 }));
-    world->scene[1]->setMaterial(
+    world->scene[2]->setMaterial(
         std::make_shared<Matte>(0.20f, 0.20f, Colour{ 0.5,0.5,0.5 }));
- 
-    world->scene.push_back(
-        std::make_shared<Sphere>(atlas::math::Point{ 125, 90, 150 }, 90.0f));
-    world->scene[2]->setMaterial(RSpc);
+     */
+    //world->scene.push_back(
+    //    std::make_shared<Sphere>(atlas::math::Point{ 125, 90, 150 }, 90.0f));
+    //world->scene[3]->setMaterial(RSpc);
 
-    world->scene.push_back(
-        std::make_shared<Cylinder>(0.0f, 250.0f, 90.0f));
-    world->scene[3]->setMaterial(GSpc);
+    //world->scene.push_back(
+    //    std::make_shared<Cylinder>(0.0f, 250.0f, 90.0f));
+    //world->scene[4]->setMaterial(GSpc);
 
-    world->scene.push_back(
-        std::make_shared<Box>(atlas::math::Point{150, 0, -350}, atlas::math::Point{ 400, 250 ,-100}));
-    world->scene[4]->setMaterial(YSpc);
+    //world->scene.push_back(
+    //    std::make_shared<Box>(atlas::math::Point{150, 0, -350}, atlas::math::Point{ 400, 250 ,-100}));
+    //world->scene[5]->setMaterial(YSpc);
 
 
 
@@ -892,6 +1137,7 @@ int main()
 
 */
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 /*Ambient Light*/
     world->ambient = std::make_shared<Ambient>();
     //set lights parameter
@@ -901,16 +1147,17 @@ int main()
 
 ///*Ambient Occlusion*/
     //std::shared_ptr<AmbientOccluder> AmO = std::make_shared<AmbientOccluder>();
-    ////AmO->scale_radiance(5.0f);
+    ////AmO->scale_radiance(1.5f);
     //AmO->set_min_amount(0.2f);
-    //AmO->set_sampler(new MultiJittered(4, 20));
+    //AmO->set_sampler(new MultiJittered(4,20));
     //world->set_ambient_light(AmO);
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     //world->lights.push_back(
         //std::make_shared<Directional>(Directional{ {1024, 100, 1024} }));
     
-///*Point Light*/
+/*Point Light*/
     //std::shared_ptr pointL = std::make_shared<PointLight>();
     //pointL->setLocation({-300.0f, 350.0f, 624.0f });
     //pointL->scaleRadiance(6.5f);
@@ -933,13 +1180,13 @@ int main()
     /*world->scene.push_back(
         std::make_shared<Disk>(atlas::math::Point{ 50,400, 60 }, 50.0f, atlas::math::Vector{ 0, -1 ,0 }));*/
     
-/*Area Light Object*/
+///*Area Light Object: Rectangle AreaLight*/
     std::shared_ptr<Emissive> Emm{ std::make_shared<Emissive>() };
-    Emm->scale_radiance(40.0f);
+    Emm->scale_radiance(70.0f);
     Emm->set_ce({ 1,1,1 });
     std::shared_ptr<Rectangle> Rec{ std::make_shared<Rectangle>(atlas::math::Point{ -150,440, 440 }, atlas::math::Vector{ 0, 0 ,-300 }, atlas::math::Vector{ 300, 0 ,0 }) };
     Rec->setMaterial(Emm);
-    Rec->set_sampler(new MultiJittered(4, 40));
+    Rec->set_sampler(MultiSam.get());
     Rec->set_shadows(false);
     world->add_object(Rec);
 
@@ -948,7 +1195,7 @@ int main()
     areaL->set_object(Rec);
     world->add_light(areaL);
 
-/*Area Light Object*/
+///*Area Light Object: Spherical AreaLight*/
     //std::shared_ptr<Emissive> Emm2{ std::make_shared<Emissive>() };
     //Emm2->scale_radiance(5.0f);
     //Emm2->set_ce({ 1,1,1 });
@@ -964,7 +1211,14 @@ int main()
     //world->add_light(areaL2);
 
 
-
+/*Instance*/
+    //Sphere* sp = new Sphere(atlas::math::Point{ 125, 90, 150 }, 90.0f);
+    //sp->setMaterial(RSpc);
+    //std::shared_ptr<Instance> instance = std::make_shared<Instance>(sp);
+    ////instance->scale(75, 75, 75);
+    //instance->translate(.5, -5.25, 0);
+    //instance->compute_bounding_box();
+    //world->add_object(instance);
 
 
 
@@ -972,13 +1226,15 @@ int main()
     Pinhole camera{};
 
     // change camera position here
-    camera.setEye({ 0.0f, 350.0f, 750.0f });
+    camera.setEye({ 0.0f, 350.0f, 700.0f });
     camera.setLookAt({ 0.0f, 70.0f, 0.0f });
+    //camera.setZoom(9.0f);
 
     camera.computeUVW();
     camera.renderScene(world);
     //world->render_scene();
 
+    
 
     saveToBMP("AS4.bmp", world->width, world->height, world->image);
 

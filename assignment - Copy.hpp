@@ -8,11 +8,14 @@
 #include <fmt/printf.h>
 #include <stb_image.h>
 #include <stb_image_write.h>
+#include <stdlib.h>
 #include <algorithm>
+#include <iostream>
 
 #include <vector>
 #include <limits>
 #include <memory>
+
 
 using namespace atlas;
 using Colour = math::Vector;
@@ -26,8 +29,8 @@ void saveToBMP(std::string const& filename,
 // Your code here.
 const float kEpsilon{ 0.01f };
 const float invRAND_MAX = (float)(1.0 / (float)RAND_MAX);
-const double 	PI = 3.1415926535897932384;
-
+const double PI = 3.1415926535897932384;
+const double kHugeValue = 1.0E10;
 // Declarations
 class BRDF;
 class Camera;
@@ -41,8 +44,16 @@ const Colour Red = { 1,0,0 };
 const Colour Green = { 0,1,0 };
 const Colour Blue = { 0,0,1 };
 const Colour Yellow = { 1,1,0 };
+const Colour PaleRed = { 1, 0.75f, 0.65f };
+const Colour PaleGreen = { 0.65f, 1.0f, 0.75f };
+const Colour PaleBlue = { 0.65f, 0.75f, 1.0f };
 
 void colour_handling(Colour& c);
+
+double clamp(const double x, const double min, const double max) {
+    return (x < min ? min : (x > max ? max : x));
+}
+
 
 class Tracer {
 public:
@@ -63,7 +74,7 @@ protected:
     //std::string name;
 };
 
-
+/*
 class ViewPlane{
     public:
         int 			hres;   					// horizontal image resolution 
@@ -94,14 +105,15 @@ class ViewPlane{
         void set_sampler(Sampler* sp);
         void set_max_depth(int depth);
 };
-
+*/
 class World
 {
 public:
-    ViewPlane vp;
+    //ViewPlane vp;
     std::size_t width, height;
     float s;							// pixel size
     Colour background;
+    int max_depth;
     std::shared_ptr<Sampler> sampler;
     std::vector<std::shared_ptr<Shape>> scene; //objects
     std::vector<Colour> image;
@@ -111,7 +123,7 @@ public:
     std::shared_ptr<Camera> camera_ptr;
 public:
     World() : background({ 0,0,0 }), tracer_ptr(NULL),
-        camera_ptr(NULL), s(1.0f){}
+        camera_ptr(NULL), s(1.0f), max_depth(1) {}
     ~World() {};
     void add_object(std::shared_ptr<Shape> object_ptr) {
         scene.push_back(object_ptr);
@@ -275,7 +287,7 @@ public:
     Colour getColour() const {
         return mColour;
     }
-    void setMaterial(std::shared_ptr<Material> const& material) {
+    virtual void setMaterial(std::shared_ptr<Material>  material) {
         mMaterial = material;
     }
     std::shared_ptr<Material> getMaterial() const {
@@ -302,7 +314,7 @@ public:
     }
 protected:
     Colour mColour;
-    std::shared_ptr<Material> mMaterial;
+    mutable std::shared_ptr<Material> mMaterial;        //coule be changed in const func
     bool shadows;
     Shape& operator= (const Shape& rhs) {
         if (this == &rhs)
@@ -381,15 +393,18 @@ public:
     virtual void generateSamples() = 0;
     atlas::math::Point sampleUnitSquare() {
         //this is NULL ptr
-        if (this == NULL) {
-            printf("Line 380 NULL Sampler!\n");
-        }
+        //Error here!
+        //if (this == NULL) {
+        //   printf("Line 380 NULL Sampler!\n");
+        //}
         if (mCount % mNumSamples == 0)
         {
-            atlas::math::Random<int> engine;
-            mJump = (engine.getRandomMax() % mNumSets) * mNumSamples;
+            //atlas::math::Random<int> engine;
+            //mJump = (engine.getRandomMax() % mNumSets) * mNumSamples;
+            mJump = (rand_int() % mNumSets) * mNumSamples;
         }
-        return mSamples[mJump + mShuffledIndeces[mJump + mCount++ % mNumSamples]];
+        int temp = mShuffledIndeces[mJump + mCount++ % mNumSamples];
+        return mSamples[temp+mJump];
     }
     atlas::math::Point sample_hemisphere(void) {
         if (mCount % mNumSamples == 0)	// start of new pixel
@@ -497,6 +512,7 @@ protected:
     int mNumSets;
     unsigned long mCount;
     int mJump;
+    // too much Data here stored in Stack cause stack overflow!
 };
 
 
@@ -584,11 +600,12 @@ public:
         sampler_ptr = sPtr;
         sampler_ptr->map_samples_to_hemisphere(1);	// perfect diffuse
     }
-    virtual Colour fn(ShadeRec const& sr,
-        atlas::math::Vector const& reflected,
-        atlas::math::Vector const& incoming) const = 0;
-    virtual Colour rho(ShadeRec const& sr,
-        atlas::math::Vector const& reflected) const = 0;
+    virtual Colour fn(ShadeRec const&, atlas::math::Vector const& , atlas::math::Vector const& ) const {
+        return { 0,0,0 };
+    }
+    virtual Colour rho(ShadeRec const&, atlas::math::Vector const& ) const {
+        return { 0,0,0 };
+    }
     virtual Colour sample_f(const ShadeRec& sr, atlas::math::Vector& wi, const atlas::math::Vector& wo) const = 0;
 protected:
     Sampler* sampler_ptr;
@@ -1000,10 +1017,12 @@ public:
         copy_objects(c.objects);
         return (*this);
     }
-    virtual void set_material(std::shared_ptr<Material> mat_ptr) {
+    virtual void setMaterial(std::shared_ptr<Material> mat_ptr) {
+        //printf("Parts num:%d\n", (int)objects.size());
         int num_objects = (int)objects.size();
-        for (int j = 0; j < num_objects; j++)
+        for (int j = 0; j < num_objects; j++) {
             objects[j]->setMaterial(mat_ptr);
+        }
     }
     virtual void add_object(Shape* obj_ptr) {
         objects.push_back(obj_ptr);
@@ -1025,7 +1044,7 @@ public:
             if (objects[j]->hit(ray, t, sr) && (t < tmin)) {
                 hit = true;
                 tmin = t;
-                //material_ptr = objects[j]->getMaterial();
+                mMaterial = objects[j]->getMaterial();
                 normal = sr.normal;
                 local_hit_point = sr.local_hit_point;
             }
@@ -1088,6 +1107,134 @@ private:
 
 };
 
+
+class Triangle : public Shape {
+public:
+    atlas::math::Point v0, v1, v2;
+    atlas::math::Vector normal;
+    Triangle(void) : Shape(), v0(0, 0, 0), v1(0, 0, 1), v2(1, 0, 0), normal(0, 1, 0)  {}
+
+    Triangle(const atlas::math::Point& a, const atlas::math::Point& b, const atlas::math::Point& c) : Shape(),
+        v0(a), v1(b), v2(c) {
+        //normal = (v1 - v0) ^ (v2 - v0);
+        atlas::math::Vector temp1 = v1 - v0;
+        atlas::math::Vector temp2 = v2 - v0;
+        normal = (atlas::math::Vector(temp1.y * temp2.z - temp1.z * temp2.y, temp1.z * temp2.x - temp1.x * temp2.z, temp1.x * temp2.y - temp1.y * temp2.x));
+        normalize(normal);
+    }
+
+    Triangle(const Triangle& tri) : Shape(),
+        v0(tri.v0),
+        v1(tri.v1),
+        v2(tri.v2),
+        normal(tri.normal)
+    {}
+
+    Triangle& operator=(const Triangle& tri) {
+        if (this == &tri)
+            return (*this);
+
+        v0 = tri.v0;
+        v1 = tri.v1;
+        v2 = tri.v2;
+        normal = tri.normal;
+
+        return (*this);
+    }
+    virtual std::shared_ptr<Shape> clone() const {
+        return(std::make_shared<Triangle>(*this));
+    }
+
+    virtual bool hit(atlas::math::Ray<atlas::math::Vector> const& ray, double& tmin, ShadeRec& sr) const {
+        double a = v0.x - v1.x, b = v0.x - v2.x, c = ray.d.x, d = v0.x - ray.o.x;
+        double e = v0.y - v1.y, f = v0.y - v2.y, g = ray.d.y, h = v0.y - ray.o.y;
+        double i = v0.z - v1.z, j = v0.z - v2.z, k = ray.d.z, l = v0.z - ray.o.z;
+
+        double m = f * k - g * j, n = h * k - g * l, p = f * l - h * j;
+        double q = g * i - e * k, s = e * j - f * i;
+
+        double inv_denom = 1.0 / (a * m + b * q + c * s);
+
+        double e1 = d * m - b * n - c * p;
+        double beta = e1 * inv_denom;
+
+        if (beta < 0.0)
+            return false;
+
+        double r = e * l - h * i;
+        double e2 = a * n + d * q + c * r;
+        double gamma = e2 * inv_denom;
+
+        if (gamma < 0.0)
+            return (false);
+
+        if (beta + gamma > 1.0)
+            return (false);
+
+        double e3 = a * p - b * r + d * s;
+        double t = e3 * inv_denom;
+
+        if (t < kEpsilon)
+            return (false);
+
+        tmin = (float)t;
+        sr.normal = normal;
+        sr.local_hit_point = ray.o + (float)t * ray.d;
+
+        return (true);
+
+    }
+
+    virtual bool shadow_hit(atlas::math::Ray<atlas::math::Vector> const& ray, float& tmin) const {
+        if (!shadows)
+            return false;
+
+        double a = v0.x - v1.x, b = v0.x - v2.x, c = ray.d.x, d = v0.x - ray.o.x;
+        double e = v0.y - v1.y, f = v0.y - v2.y, g = ray.d.y, h = v0.y - ray.o.y;
+        double i = v0.z - v1.z, j = v0.z - v2.z, k = ray.d.z, l = v0.z - ray.o.z;
+
+        double m = f * k - g * j, n = h * k - g * l, p = f * l - h * j;
+        double q = g * i - e * k, s = e * j - f * i;
+
+        double inv_denom = 1.0 / (a * m + b * q + c * s);
+
+        double e1 = d * m - b * n - c * p;
+        double beta = e1 * inv_denom;
+
+        if (beta < 0.0)
+            return false;
+
+        double r = e * l - h * i;
+        double e2 = a * n + d * q + c * r;
+        double gamma = e2 * inv_denom;
+
+        if (gamma < 0.0)
+            return (false);
+
+        if (beta + gamma > 1.0)
+            return (false);
+
+        double e3 = a * p - b * r + d * s;
+        double t = e3 * inv_denom;
+
+        if (t < kEpsilon)
+            return (false);
+
+        tmin = (float)t;
+        //	sr.normal = normal;
+        //	sr.local_hit_point = ray.o + t * ray.d;
+
+        return (true);
+    }
+
+    virtual BBox
+        get_bounding_box(void) const {
+        float delta = (float)0.000001;
+        return (BBox(std::min(std::min(v0.x, v1.x), v2.x) - delta, std::max(std::max(v0.x, v1.x), v2.x) + delta,
+            std::min(std::min(v0.y, v1.y), v2.y) - delta, std::max(std::max(v0.y, v1.y), v2.y) + delta,
+            std::min(std::min(v0.z, v1.z), v2.z) - delta, std::max(std::max(v0.z, v1.z), v2.z) + delta));
+    }
+};
 
 
 class OpenCylinder : public Shape {
@@ -1461,20 +1608,8 @@ private:
     //std::vector<atlas::math::Point> vertices;
     float x0, x1, y0, y1, z0, z1;
 };
-/*
-class OpenCylinder : public Shape {
-public:
-    OpenCylinder(const float bottom, const float top, const float radius);
-    bool hit(atlas::math::Ray<atlas::math::Vector> const& ray, ShadeRec& tracer) const;
-protected:
-    float		y0;				// bottom y value
-    float		y1;				// top y value
-    float		radius;			// radius
-    float		inv_radius;  	// one over the radius	
-    bool intersectRay(atlas::math::Ray<atlas::math::Vector> const&, float&) const { return true; }
-    bool intersectRay(atlas::math::Ray<atlas::math::Vector> const& ray, ShadeRec& sr) const;
-};
-*/
+
+
 
 class Cylinder : public Compound
 {
@@ -1670,16 +1805,16 @@ public:
     void set_cr(const float r, const float g, const float b) {
         cr.r = r; cr.g = g; cr.b = b;
     }
-    virtual Colour fn(const ShadeRec& sr, const atlas::math::Vector& wi, const atlas::math::Vector& wo) const {
+    virtual Colour fn(const ShadeRec& sr, const atlas::math::Vector& wi, const atlas::math::Vector& wo) const override{
         //return (kr * cr * invPI);
         return BRDF::fn(sr, wi, wo);
     }
     virtual Colour sample_f(const ShadeRec& sr, atlas::math::Vector& wi, const atlas::math::Vector& wo) const {
         float ndotwo =(float)glm::dot( sr.normal , wo);
         wi = (-wo + (float)2.0 * sr.normal * ndotwo);
-        return (kr * cr / (sr.normal * wi));
+        return (kr * cr / (glm::dot(sr.normal , wi)));
         // For Transparent material
-        //return (kr * cr / fabs(sr.normal * wi));
+        //return (kr * cr / fabs(glm::dot(sr.normal , wi)));
     }
     virtual Colour sample_f(const ShadeRec& sr, atlas::math::Vector& wi, const atlas::math::Vector& wo, float& pdf) const {
         float ndotwo = (float) glm::dot(sr.normal , wo);
@@ -1687,7 +1822,7 @@ public:
         pdf = (float)glm::dot(sr.normal , wi);
         return (kr * cr);
     }
-    virtual Colour rho(const ShadeRec& sr, const atlas::math::Vector& wo) const {
+    virtual Colour rho(const ShadeRec& sr, const atlas::math::Vector& wo) const override {
         //return (kr * cr);
         return BRDF::rho(sr, wo);
     }
@@ -1775,7 +1910,8 @@ public:
         if (glm::dot(sr.normal , wi) < 0.0) 						// reflected ray is below tangent plane
             wi = -sp.x * u - sp.y * v + sp.z * w;
         float phong_lobe = (float)pow(glm::dot(r , wi), exp);
-        pdf = (float)(phong_lobe * glm::dot(sr.normal , wi));
+         /////sr.normal *wi
+        pdf = (float)(phong_lobe * glm::dot(sr.normal , wi)); 
 
         return (ks * cs * phong_lobe);
     }
@@ -2122,11 +2258,11 @@ public:
                     L += (diffuse_brdf->fn(sr, wi, wo) + specular_brdf->fn(sr, wi, wo)) * sr.world.lights[j]->L(sr) *
                         sr.world.lights[j]->G(sr) * ndotwi /
                         sr.world.lights[j]->pdf(sr);
-                    if (specular_brdf->fn(sr, wi, wo).r > 0.001 || specular_brdf->fn(sr, wi, wo).g > 0.001 || specular_brdf->fn(sr, wi, wo).b > 0.001) {
+                    //if (specular_brdf->fn(sr, wi, wo).r > 0.001 || specular_brdf->fn(sr, wi, wo).g > 0.001 || specular_brdf->fn(sr, wi, wo).b > 0.001) {
                        // printf("Spec_brdf-f = (%f,%f,%f)\n", specular_brdf->fn(sr, wi, wo).r, specular_brdf->fn(sr, wi, wo).g, specular_brdf->fn(sr, wi, wo).b);
 
                       //  printf("lights[%d]->getDirection(sr) = (%f,%f,%f)\n", j, wi.x, wi.y, wi.z);
-                    }
+                    //}
                     
                 }
             }
@@ -2139,6 +2275,233 @@ private:
     Lambertian* diffuse_brdf;
     GlossySpecular* specular_brdf;
 };
+
+
+
+class Reflective : public Phong {
+public:
+
+    Reflective(void) : Phong(), reflective_brdf(new PerfectSpecular) {}
+    Reflective(const Reflective& rm) : Phong(rm) {
+        if (rm.reflective_brdf)
+            reflective_brdf = (PerfectSpecular*)rm.reflective_brdf->clone();
+        else
+            reflective_brdf = NULL;
+    }
+    Reflective& operator= (const Reflective& rhs) {
+        if (this == &rhs)
+            return (*this);
+        Phong::operator=(rhs);
+        if (reflective_brdf) {
+            delete reflective_brdf;
+            reflective_brdf = NULL;
+        }
+
+        if (rhs.reflective_brdf)
+            reflective_brdf = (PerfectSpecular*)rhs.reflective_brdf->clone();
+
+        return (*this);
+    }
+    virtual std::shared_ptr<Material> clone() const {
+        return (std::make_shared<Reflective>(*this));
+    }
+    ~Reflective(void) {
+        if (reflective_brdf) {
+            delete reflective_brdf;
+            reflective_brdf = NULL;
+        }
+    }
+    void set_kr(const float k) {
+        reflective_brdf->set_kr(k);
+    }
+    void set_cr(const Colour& c) {
+        reflective_brdf->set_cr(c);
+
+    }
+    void set_cr(const float r, const float g, const float b) {
+        reflective_brdf->set_cr(r, g, b);
+    }
+    void set_cr(const float c) {
+        reflective_brdf->set_cr({ c,c,c });
+    }
+
+    virtual Colour shade(ShadeRec& sr) {
+        Colour L(Phong::shade(sr));	// direct illumination
+
+        atlas::math::Vector wo = -sr.ray.d;
+        atlas::math::Vector wi;
+        Colour fr = reflective_brdf->sample_f(sr, wi, wo);
+        atlas::math::Ray<atlas::math::Vector> reflected_ray(sr.local_hit_point, wi);
+        //reflected_ray.depth = sr.depth + 1;
+
+        L += fr * sr.world.tracer_ptr->trace_ray(reflected_ray, sr.depth + 1) * (glm::dot(sr.normal , wi));
+
+        return (L);
+    }
+
+    virtual Colour path_shade(ShadeRec& sr) {
+        atlas::math::Vector wo = -sr.ray.d;
+        atlas::math::Vector wi;
+        float pdf;
+        Colour fr = reflective_brdf->sample_f(sr, wi, wo, pdf);
+        atlas::math::Ray<atlas::math::Vector> reflected_ray(sr.local_hit_point, wi);
+
+
+        return (fr * sr.world.tracer_ptr->trace_ray(reflected_ray, sr.depth + 1) * (glm::dot(sr.normal , wi)) / pdf);
+    }
+
+    void set_sampler(Sampler* sampl_ptr) {
+        reflective_brdf->set_sampler(sampl_ptr);
+    }
+
+    virtual Colour global_shade(ShadeRec& sr) {
+        atlas::math::Vector wo = -sr.ray.d;
+        atlas::math::Vector wi;
+        float pdf;
+        Colour fr = reflective_brdf->sample_f(sr, wi, wo, pdf);
+        atlas::math::Ray<atlas::math::Vector> reflected_ray(sr.local_hit_point, wi);
+
+        if (sr.depth == 0)
+            return (fr * sr.world.tracer_ptr->trace_ray(reflected_ray, sr.depth + 2) * (glm::dot(sr.normal , wi)) / pdf);
+        else
+            return (fr * sr.world.tracer_ptr->trace_ray(reflected_ray, sr.depth + 1) * (glm::dot(sr.normal , wi)) / pdf);
+    }
+
+private:
+
+    PerfectSpecular* reflective_brdf;
+};
+
+
+
+class GlossyReflector : public Phong {
+public:
+
+    GlossyReflector() : Phong(),
+        glossy_specular_brdf(new GlossySpecular)
+    {}
+
+    GlossyReflector(const GlossyReflector& rm) : Phong(rm) {
+
+        if (rm.glossy_specular_brdf)
+            glossy_specular_brdf = (GlossySpecular*)rm.glossy_specular_brdf->clone();
+        else
+            glossy_specular_brdf = NULL;
+    }
+
+    GlossyReflector&
+        operator= (const GlossyReflector& rhs) {
+        if (this == &rhs)
+            return (*this);
+
+        Phong::operator=(rhs);
+
+        if (glossy_specular_brdf) {
+            delete glossy_specular_brdf;
+            glossy_specular_brdf = NULL;
+        }
+
+        if (rhs.glossy_specular_brdf)
+            glossy_specular_brdf = (GlossySpecular*)rhs.glossy_specular_brdf->clone();
+
+        return (*this);
+    }
+
+    virtual std::shared_ptr<Material> clone() const {
+        return (std::make_shared<GlossyReflector>(*this));
+    }
+
+    ~GlossyReflector(void) {
+        if (glossy_specular_brdf) {
+            delete glossy_specular_brdf;
+            glossy_specular_brdf = NULL;
+        }
+    }
+
+    void
+        set_samples(const int num_samples, const float exp) {
+        glossy_specular_brdf->set_samples(num_samples, exp);
+    }
+
+    void
+        set_kr(const float k) {
+        glossy_specular_brdf->set_ks(k);
+    }
+
+    void set_cr(const Colour& c) {
+        glossy_specular_brdf->set_cs(c);
+    }
+
+    void set_cr(const float r, const float g, const float b) {
+        glossy_specular_brdf->set_cs(r, g, b);
+    }
+
+    void set_cr(const float c) {
+        glossy_specular_brdf->set_cs({ c,c,c });
+    }
+
+    void set_exponent(const float exp) {
+        glossy_specular_brdf->set_exp(exp);
+    }
+
+    virtual Colour shade(ShadeRec& sr) {
+        return Phong::shade(sr);
+    }
+
+    virtual Colour area_light_shade(ShadeRec& sr) {
+        Colour L(Phong::area_light_shade(sr));	// direct illumination
+
+        atlas::math::Vector wo(-sr.ray.d);
+        atlas::math::Vector wi;
+        float pdf;
+        Colour fr(glossy_specular_brdf->sample_f(sr, wi, wo, pdf));
+        atlas::math::Ray<atlas::math::Vector> reflected_ray;
+        reflected_ray.o = sr.local_hit_point;
+        reflected_ray.d = wi;
+        //printf("ray.d is (%f,%f,%f)\n", reflected_ray.d.x, reflected_ray.d.y, reflected_ray.d.z);
+        //L += fr * sr.world.tracer_ptr->trace_ray(reflected_ray, sr.depth + 1) * sr.normal * wi;
+        // Originally is sr.normal* wi here 
+        Colour temp1 = fr * sr.world.tracer_ptr->trace_ray(reflected_ray, sr.depth + 1);
+        float temp2 = glm::dot(sr.normal, wi);
+        L += temp1 * temp2;
+
+        return (L);
+    }
+
+    /*virtual Colour area_light_shade(ShadeRec& sr) {
+        atlas::math::Vector wo = -sr.ray.d;
+        Colour L = ambient_brdf->rho(sr, wo) * sr.world.ambient->L(sr);
+        int num_lights = (int)sr.world.lights.size();
+
+        for (int j = 0; j < num_lights; j++) {
+            atlas::math::Vector wi = sr.world.lights[j]->getDirection(sr);
+            float ndotwi = (float)glm::dot(sr.normal, wi);
+
+            if (ndotwi > 0.0) {
+                bool in_shadow = false;
+                if (sr.world.lights[j]->casts_shadows()) {
+                    atlas::math::Ray<atlas::math::Vector> shadow_ray(sr.local_hit_point, wi);
+                    in_shadow = sr.world.lights[j]->in_shadow(shadow_ray, sr);
+                }
+
+                if (!in_shadow) {
+                    L += (diffuse_brdf->fn(sr, wi, wo) + specular_brdf->fn(sr, wi, wo)) * sr.world.lights[j]->L(sr) *
+                        sr.world.lights[j]->G(sr) * ndotwi /
+                        sr.world.lights[j]->pdf(sr);
+                }
+            }
+        }
+        return (L);
+    }*/
+
+private:
+
+    GlossySpecular* glossy_specular_brdf;
+};
+
+
+
+
 
 
 // ***Lights***
@@ -2523,12 +2886,15 @@ public:
         }
     }
     virtual Colour trace_ray(atlas::math::Ray<atlas::math::Vector> const ray, const int depth) const override {
+        Colour black = { 0,0,0 };
+        if (depth > world_ptr->max_depth)
+            return (black);
         ShadeRec sr(world_ptr->hit_objects(ray)); // sr is copy constructed
         if (sr.hit_an_object) {
             //printf("trace_ray hit\n");
             sr.depth = depth;
             sr.ray = ray; 
-            Colour temp = sr.material->area_light_shade(sr);
+             Colour temp = sr.material->area_light_shade(sr);
             //printf("(%f,%f,%f)\n", temp.r, temp.g, temp.b);
             //return(temp);
             return (sr.material->area_light_shade(sr));
@@ -2539,7 +2905,7 @@ public:
 
     virtual Colour trace_ray(atlas::math::Ray<atlas::math::Vector> const ray, float& tmin, const int depth) const override {
         Colour black = { 0,0,0 };
-        if (depth > world_ptr->vp.max_depth)
+        if (depth > world_ptr->max_depth)
             return (black);
         else {
             ShadeRec sr(world_ptr->hit_objects(ray));
@@ -2576,7 +2942,7 @@ public:
     }
 
     virtual Colour trace_ray(atlas::math::Ray<atlas::math::Vector> const ray, const int depth) const override {
-        if (depth > world_ptr->vp.max_depth) {
+        if (depth > world_ptr->max_depth) {
             Colour black = { 0,0,0 };
             return (black);
         }
@@ -2593,7 +2959,7 @@ public:
     }
 
     virtual Colour trace_ray(atlas::math::Ray<atlas::math::Vector> const ray, float& tmin, const int depth) const override{
-        if (depth > world_ptr->vp.max_depth) {
+        if (depth > world_ptr->max_depth) {
             Colour black = { 0,0,0 };
             return (black);
         }
@@ -2622,6 +2988,8 @@ void process_indicator(const int r, const int vres) {
         printf("Process: 20%%\n");
     else if (r == (int)(vres / 3.33))
         printf("Process: 30%%\n");
+    else if (r == (int)(vres / 2.5))
+        printf("Process: 40%%\n");
     else if (r == (int)(vres / 2))
         printf("Process: 50%%\n");
     else if (r == (int)(vres / 1.67))
@@ -2641,3 +3009,1797 @@ void process_indicator(const int r, const int vres) {
     else if (r == (int)(vres / 1.053))
         printf("Process: 95%%\n");
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ***Mesh***
+class Mesh {
+public:
+    std::vector<atlas::math::Point> vertices;
+    std::vector<int> indices;
+    std::vector<atlas::math::Vector> normals;
+    std::vector<std::vector<int> > vertex_faces; // faces shared by each vertex
+    std::vector<float> u;	// texture coordinates
+    std::vector<float> v;
+    int num_vertices;
+    int num_triangles;
+
+};
+
+class MeshTriangle : Shape {
+public:
+    Mesh* mesh_ptr;					// data stored here
+    int	index0, index1, index2;		// indices into the data
+    atlas::math::Vector	normal;
+    float area;	// required for translucency?
+
+    MeshTriangle(void) : Shape(),
+        mesh_ptr(NULL),
+        index0(0), index1(0), index2(0),
+        normal()
+    {}
+
+    MeshTriangle(Mesh* _mesh_ptr, const int i0, const int i1, const int i2) : Shape(),
+        mesh_ptr(_mesh_ptr),
+        index0(i0), index1(i1), index2(i2)
+    {}
+
+    //virtual MeshTriangle* clone(void) const = 0;
+
+    MeshTriangle(const MeshTriangle& mt) : Shape(mt),
+        mesh_ptr(mt.mesh_ptr), // just the pointer
+        index0(mt.index0),
+        index1(mt.index1),
+        index2(mt.index2),
+        normal(mt.normal)
+    {}
+
+    virtual  ~MeshTriangle(void) {
+        if (mesh_ptr) {
+            delete mesh_ptr;
+            mesh_ptr = NULL;
+        }
+    }
+
+    MeshTriangle& operator= (const MeshTriangle& rhs) {
+        if (this == &rhs)
+            return (*this);
+
+        Shape::operator= (rhs);
+
+        mesh_ptr = rhs.mesh_ptr; // just the pointer
+        index0 = rhs.index0;
+        index1 = rhs.index1;
+        index2 = rhs.index2;
+        normal = rhs.normal;
+
+        return (*this);
+    }
+
+    virtual bool hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin, ShadeRec& sr) const = 0;
+
+    virtual bool shadow_hit(atlas::math::Ray<atlas::math::Vector> const & ray, float& tmin) const {
+        atlas::math::Vector v0(mesh_ptr->vertices[index0]);
+        atlas::math::Vector v1(mesh_ptr->vertices[index1]);
+        atlas::math::Vector v2(mesh_ptr->vertices[index2]);
+
+        double a = v0.x - v1.x, b = v0.x - v2.x, c = ray.d.x, d = v0.x - ray.o.x;
+        double e = v0.y - v1.y, f = v0.y - v2.y, g = ray.d.y, h = v0.y - ray.o.y;
+        double i = v0.z - v1.z, j = v0.z - v2.z, k = ray.d.z, l = v0.z - ray.o.z;
+
+        double m = f * k - g * j, n = h * k - g * l, p = f * l - h * j;
+        double q = g * i - e * k, s = e * j - f * i;
+
+        double inv_denom = 1.0 / (a * m + b * q + c * s);
+
+        double e1 = d * m - b * n - c * p;
+        double beta = e1 * inv_denom;
+
+        if (beta < 0.0)
+            return (false);
+
+        double r = r = e * l - h * i;
+        double e2 = a * n + d * q + c * r;
+        double gamma = e2 * inv_denom;
+
+        if (gamma < 0.0)
+            return (false);
+
+        if (beta + gamma > 1.0)
+            return (false);
+
+        double e3 = a * p - b * r + d * s;
+        double t = e3 * inv_denom;
+
+        if (t < kEpsilon)
+            return (false);
+
+        tmin = (float)t;
+
+        return (true);
+    }
+
+    void compute_normal(const bool reverse_normal) {
+        //normal = (mesh_ptr->vertices[index1] - mesh_ptr->vertices[index0]) ^
+        //    (mesh_ptr->vertices[index2] - mesh_ptr->vertices[index0]);
+        atlas::math::Vector temp1 = mesh_ptr->vertices[index1] - mesh_ptr->vertices[index0];
+        atlas::math::Vector temp2 = (mesh_ptr->vertices[index2] - mesh_ptr->vertices[index0]);
+        normal = (atlas::math::Vector(temp1.y * temp2.z - temp1.z * temp2.y, temp1.z * temp2.x - temp1.x * temp2.z, temp1.x * temp2.y - temp1.y * temp2.x));
+        normalize(normal);
+
+        if (reverse_normal)
+            normal = -normal;
+    }
+
+    atlas::math::Vector
+        get_normal(void) const {
+        return (normal);
+    }
+
+    virtual BBox
+        get_bounding_box(void) const {
+        double delta = 0.0001;  // to avoid degenerate bounding boxes
+
+        atlas::math::Vector v1(mesh_ptr->vertices[index0]);
+        atlas::math::Vector v2(mesh_ptr->vertices[index1]);
+        atlas::math::Vector v3(mesh_ptr->vertices[index2]);
+
+        return(BBox(std::min(std::min(v1.x, v2.x), v3.x) - (float)delta, std::max(std::max(v1.x, v2.x), v3.x) + (float)delta,
+            std::min(std::min(v1.y, v2.y), v3.y) - (float)delta, std::max(std::max(v1.y, v2.y), v3.y) + (float)delta,
+            std::min(std::min(v1.z, v2.z), v3.z) - (float)delta, std::max(std::max(v1.z, v2.z), v3.z) + (float)delta));
+    }
+protected:
+    float interpolate_u(const float beta, const float gamma) const {
+        //float u1 = mesh_ptr->u[index0];
+        //float u2 = mesh_ptr->u[index1];
+        //float u3 = mesh_ptr->u[index2];
+        return((1 - beta - gamma) * mesh_ptr->u[index0]
+            + beta * mesh_ptr->u[index1]
+            + gamma * mesh_ptr->u[index2]);
+    }
+    float interpolate_v(const float beta, const float gamma) const {
+        return((1 - beta - gamma) * mesh_ptr->v[index0]
+            + beta * mesh_ptr->v[index1]
+            + gamma * mesh_ptr->v[index2]);
+    }
+
+};
+
+
+class FlatMeshTriangle : public MeshTriangle {
+public:
+
+    FlatMeshTriangle(void) : MeshTriangle()
+    {}
+
+    FlatMeshTriangle(Mesh* _meshPtr, const int i0, const int i1, const int i2) : MeshTriangle(_meshPtr, i0, i1, i2)
+    {}
+
+    //virtual FlatMeshTriangle* clone(void) const {
+    //    return (new FlatMeshTriangle(*this));
+    //}
+
+
+    FlatMeshTriangle(const FlatMeshTriangle& fmt) : MeshTriangle(fmt)
+    {}
+
+    virtual ~FlatMeshTriangle(void) {}
+
+    FlatMeshTriangle&
+        operator= (const FlatMeshTriangle& rhs) {
+        if (this == &rhs)
+            return (*this);
+
+        MeshTriangle::operator= (rhs);
+
+        return (*this);
+    }
+
+    virtual	bool hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin, ShadeRec& sr) const {
+        atlas::math::Vector v0(mesh_ptr->vertices[index0]);
+        atlas::math::Vector v1(mesh_ptr->vertices[index1]);
+        atlas::math::Vector v2(mesh_ptr->vertices[index2]);
+
+        double a = v0.x - v1.x, b = v0.x - v2.x, c = ray.d.x, d = v0.x - ray.o.x;
+        double e = v0.y - v1.y, f = v0.y - v2.y, g = ray.d.y, h = v0.y - ray.o.y;
+        double i = v0.z - v1.z, j = v0.z - v2.z, k = ray.d.z, l = v0.z - ray.o.z;
+
+        double m = f * k - g * j, n = h * k - g * l, p = f * l - h * j;
+        double q = g * i - e * k, s = e * j - f * i;
+
+        double inv_denom = 1.0 / (a * m + b * q + c * s);
+
+        double e1 = d * m - b * n - c * p;
+        double beta = e1 * inv_denom;
+
+        if (beta < 0.0)
+            return (false);
+
+        double r = e * l - h * i;
+        double e2 = a * n + d * q + c * r;
+        double gamma = e2 * inv_denom;
+
+        if (gamma < 0.0)
+            return (false);
+
+        if (beta + gamma > 1.0)
+            return (false);
+
+        double e3 = a * p - b * r + d * s;
+        double t = e3 * inv_denom;
+
+        if (t < kEpsilon)
+            return (false);
+
+        tmin = t;
+        sr.normal = normal;  				// for flat shading
+        sr.local_hit_point = ray.o + (float)t * ray.d;
+
+        return (true);
+    }
+
+    //	virtual bool
+    //	shadow_hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin) const{
+    //	    eturn MeshTriangle::shadow_hit(ray, tmin);
+    //  }
+
+};
+
+
+class SmoothMeshTriangle : public MeshTriangle {
+public:
+    SmoothMeshTriangle(void) : MeshTriangle()
+    {}
+    SmoothMeshTriangle(Mesh* _meshPtr, const int i0, const int i1, const int i2) : MeshTriangle(_meshPtr, i0, i1, i2)
+    {}
+    //virtual SmoothMeshTriangle* clone(void) const {
+    //    return (new SmoothMeshTriangle(*this));
+    //}
+
+    SmoothMeshTriangle(const SmoothMeshTriangle& fmt) : MeshTriangle(fmt)
+    {}
+
+    virtual
+        ~SmoothMeshTriangle(void) {}
+
+    SmoothMeshTriangle&
+        operator= (const SmoothMeshTriangle& rhs) {
+        if (this == &rhs)
+            return (*this);
+
+        MeshTriangle::operator= (rhs);
+
+        return (*this);
+    }
+
+    virtual	bool
+        hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin, ShadeRec& sr) const {
+        atlas::math::Vector v0(mesh_ptr->vertices[index0]);
+        atlas::math::Vector v1(mesh_ptr->vertices[index1]);
+        atlas::math::Vector v2(mesh_ptr->vertices[index2]);
+
+        double a = v0.x - v1.x, b = v0.x - v2.x, c = ray.d.x, d = v0.x - ray.o.x;
+        double e = v0.y - v1.y, f = v0.y - v2.y, g = ray.d.y, h = v0.y - ray.o.y;
+        double i = v0.z - v1.z, j = v0.z - v2.z, k = ray.d.z, l = v0.z - ray.o.z;
+
+        double m = f * k - g * j, n = h * k - g * l, p = f * l - h * j;
+        double q = g * i - e * k, s = e * j - f * i;
+
+        double inv_denom = 1.0 / (a * m + b * q + c * s);
+
+        double e1 = d * m - b * n - c * p;
+        double beta = e1 * inv_denom;
+
+        if (beta < 0.0)
+            return (false);
+
+        double r = e * l - h * i;
+        double e2 = a * n + d * q + c * r;
+        double gamma = e2 * inv_denom;
+
+        if (gamma < 0.0)
+            return (false);
+
+        if (beta + gamma > 1.0)
+            return (false);
+
+        double e3 = a * p - b * r + d * s;
+        double t = e3 * inv_denom;
+
+        if (t < kEpsilon)
+            return (false);
+
+        tmin = (float)t;
+        sr.normal = interpolate_normal((float)beta, (float)gamma); // for smooth shading
+        sr.local_hit_point = ray.o + (float)t * ray.d;
+
+        return (true);
+    }
+
+
+protected:
+
+    atlas::math::Vector interpolate_normal(const float beta, const float gamma) const {
+        atlas::math::Vector normal2((1 - beta - gamma) * mesh_ptr->normals[index0]
+            + beta * mesh_ptr->normals[index1]
+            + gamma * mesh_ptr->normals[index2]);
+        normalize(normal2);
+        return(normal2);
+    }
+};
+
+/**
+class FlatUVMeshTriangle : public FlatMeshTriangle {
+public:
+
+    FlatUVMeshTriangle(void) : FlatMeshTriangle()
+    {}
+
+    FlatUVMeshTriangle(Mesh* _meshPtr, const int i0, const int i1, const int i2) : FlatMeshTriangle(_mesh_ptr, i0, i1, i2)
+    {}
+
+    virtual FlatUVMeshTriangle*
+        clone(void) const {
+        return (new FlatUVMeshTriangle(*this));
+    }
+
+    FlatUVMeshTriangle(const FlatUVMeshTriangle& fmt) : FlatMeshTriangle(fmt)
+    {}
+
+    virtual
+        ~FlatUVMeshTriangle(void) {}
+
+    FlatUVMeshTriangle&
+        operator= (const FlatUVMeshTriangle& rhs) {
+        if (this == &rhs)
+            return (*this);
+
+        FlatMeshTriangle::operator= (rhs);
+
+        return (*this);
+    }
+
+    virtual	bool
+        hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin, ShadeRec& sr) const {
+        atlas::math::Vector v0(mesh_ptr->vertices[index0]);
+        atlas::math::Vector v1(mesh_ptr->vertices[index1]);
+        atlas::math::Vector v2(mesh_ptr->vertices[index2]);
+
+        double a = v0.x - v1.x, b = v0.x - v2.x, c = ray.d.x, d = v0.x - ray.o.x;
+        double e = v0.y - v1.y, f = v0.y - v2.y, g = ray.d.y, h = v0.y - ray.o.y;
+        double i = v0.z - v1.z, j = v0.z - v2.z, k = ray.d.z, l = v0.z - ray.o.z;
+
+        double m = f * k - g * j, n = h * k - g * l, p = f * l - h * j;
+        double q = g * i - e * k, s = e * j - f * i;
+
+        double inv_denom = 1.0 / (a * m + b * q + c * s);
+
+        double e1 = d * m - b * n - c * p;
+        double beta = e1 * inv_denom;
+
+        if (beta < 0.0)
+            return (false);
+
+        double r = e * l - h * i;
+        double e2 = a * n + d * q + c * r;
+        double gamma = e2 * inv_denom;
+
+        if (gamma < 0.0)
+            return (false);
+
+        if (beta + gamma > 1.0)
+            return (false);
+
+        double e3 = a * p - b * r + d * s;
+        double t = e3 * inv_denom;
+
+        if (t < kEpsilon)
+            return (false);
+
+        tmin = t;
+        sr.normal = normal;  				// for flat shading
+        //sr.local_hit_point 	= ray.o + t * ray.d;	
+
+        sr.u = interpolate_u(beta, gamma);
+        sr.v = interpolate_v(beta, gamma);
+
+        return (true);
+    }
+
+    //	virtual bool
+    //	shadow_hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin) const{
+    //	   return MeshTriangle::shadow_hit(ray, tmin);
+    //  }
+    class SmoothUVMeshTriangle : public SmoothMeshTriangle {
+    public:
+
+        SmoothUVMeshTriangle(void) : SmoothMeshTriangle()
+        {}
+
+        SmoothUVMeshTriangle(Mesh* _meshPtr, const int i0, const int i1, const int i2) : SmoothMeshTriangle(_mesh_ptr, i0, i1, i2)
+        {}
+
+        virtual SmoothUVMeshTriangle*
+            clone(void) const {
+            return (new SmoothUVMeshTriangle(*this));
+        }
+
+        SmoothUVMeshTriangle(const SmoothUVMeshTriangle& fmt) : SmoothMeshTriangle(fmt)
+        {}
+
+        virtual
+            ~SmoothUVMeshTriangle(void) {}
+
+        SmoothUVMeshTriangle&
+            operator= (const SmoothUVMeshTriangle& rhs) {
+            if (this == &rhs)
+                return (*this);
+
+            SmoothMeshTriangle::operator= (rhs);
+
+            return (*this);
+        }
+
+        virtual	bool
+            hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin, ShadeRec& sr) const {
+            atlas::math::Vector v0(mesh_ptr->vertices[index0]);
+            atlas::math::Vector v1(mesh_ptr->vertices[index1]);
+            atlas::math::Vector v2(mesh_ptr->vertices[index2]);
+
+            double a = v0.x - v1.x, b = v0.x - v2.x, c = ray.d.x, d = v0.x - ray.o.x;
+            double e = v0.y - v1.y, f = v0.y - v2.y, g = ray.d.y, h = v0.y - ray.o.y;
+            double i = v0.z - v1.z, j = v0.z - v2.z, k = ray.d.z, l = v0.z - ray.o.z;
+
+            double m = f * k - g * j, n = h * k - g * l, p = f * l - h * j;
+            double q = g * i - e * k, s = e * j - f * i;
+
+            double inv_denom = 1.0 / (a * m + b * q + c * s);
+
+            double e1 = d * m - b * n - c * p;
+            double beta = e1 * inv_denom;
+
+            if (beta < 0.0)
+                return (false);
+
+            double r = e * l - h * i;
+            double e2 = a * n + d * q + c * r;
+            double gamma = e2 * inv_denom;
+
+            if (gamma < 0.0)
+                return (false);
+
+            if (beta + gamma > 1.0)
+                return (false);
+
+            double e3 = a * p - b * r + d * s;
+            double t = e3 * inv_denom;
+
+            if (t < kEpsilon)
+                return (false);
+
+            tmin = t;
+            sr.normal = interpolate_normal(beta, gamma); // for smooth shading
+            //sr.local_hit_point 	= ray.o + t * ray.d;	
+            sr.u = interpolate_u(beta, gamma);
+            sr.v = interpolate_v(beta, gamma);
+
+            return (true);
+        }
+
+    };
+};
+*/
+
+
+
+
+
+
+
+
+
+
+
+typedef enum {
+    flat,
+    smooth
+} TriangleType;
+// ***Grid***
+class Grid : public Compound {
+public:
+
+    Grid(void) : Compound(), nx(0), ny(0), nz(0), mesh_ptr(new Mesh), reverse_normal(false) { }
+    Grid& operator=(const Grid& grid);
+    Grid(Mesh* _mesh_ptr) : Compound(), nx(0), ny(0), nz(0), mesh_ptr(_mesh_ptr), reverse_normal(false){}
+    ~Grid(void) {}
+    //virtual Grid* clone(void) const { return (*this) };
+    virtual BBox get_bounding_box(void) const {
+        return bbox;
+    }
+    atlas::math::Vector find_min_bounds(void) {
+        BBox 	object_box;
+        atlas::math::Point p0(kHugeValue);
+
+        int num_objects = (int)objects.size();
+
+        for (int j = 0; j < num_objects; j++) {
+            object_box = objects[j]->get_bounding_box();
+
+            if (object_box.x0 < p0.x)
+                p0.x = object_box.x0;
+            if (object_box.y0 < p0.y)
+                p0.y = object_box.y0;
+            if (object_box.z0 < p0.z)
+                p0.z = object_box.z0;
+        }
+
+        p0.x -= kEpsilon; p0.y -= kEpsilon; p0.z -= kEpsilon;
+
+        return (p0);
+    }
+    atlas::math::Vector find_max_bounds(void) {
+        BBox object_box;
+        atlas::math::Point p1(-kHugeValue);
+
+        int num_objects = (int)objects.size();
+
+        for (int j = 0; j < num_objects; j++) {
+            object_box = objects[j]->get_bounding_box();
+
+            if (object_box.x1 > p1.x)
+                p1.x = object_box.x1;
+            if (object_box.y1 > p1.y)
+                p1.y = object_box.y1;
+            if (object_box.z1 > p1.z)
+                p1.z = object_box.z1;
+        }
+
+        p1.x += kEpsilon; p1.y += kEpsilon; p1.z += kEpsilon;
+
+        return (p1);
+    }
+    void delete_cells(void) {
+        int num_cells = (int)cells.size();
+        for (int j = 0; j < num_cells; j++) {
+            //delete cells[j];
+            cells[j] = NULL;
+        }
+        cells.erase(cells.begin(), cells.end());
+    }
+    void copy_cells(const std::vector<Shape*>& rhs_cells) {
+        delete_cells();
+        int num_cells = (int)rhs_cells.size();
+        for (int j = 0; j < num_cells; j++)
+            cells.push_back(rhs_cells[j]->clone().get());
+    }
+    void compute_mesh_normals(void) {
+        mesh_ptr->normals.reserve(mesh_ptr->num_vertices);
+        for (int index = 0; index < mesh_ptr->num_vertices; index++) {   // for each vertex
+            atlas::math::Vector normal;    // is zero at this point	
+            for (int j = 0; j < mesh_ptr->vertex_faces[index].size(); j++)
+                normal += ((MeshTriangle*)objects[mesh_ptr->vertex_faces[index][j]])->get_normal();
+
+            // The following code attempts to avoid (nan, nan, nan) normalised normals when all components = 0
+
+            if (normal.x == 0.0 && normal.y == 0.0 && normal.z == 0.0)
+                normal.y = 1.0;
+            else
+                normalize(normal);
+
+            mesh_ptr->normals.push_back(normal);
+        }
+
+        // erase the vertex_faces arrays because we have now finished with them
+
+        for (int index = 0; index < mesh_ptr->num_vertices; index++)
+            for (int j = 0; j < mesh_ptr->vertex_faces[index].size(); j++)
+                mesh_ptr->vertex_faces[index].erase(mesh_ptr->vertex_faces[index].begin(), mesh_ptr->vertex_faces[index].end());
+
+        mesh_ptr->vertex_faces.erase(mesh_ptr->vertex_faces.begin(), mesh_ptr->vertex_faces.end());
+
+        std::cout << "finished constructing normals" << "\n";
+    }
+    void setup_cells(void) {
+        // find the minimum and maximum coordinates of the grid
+
+        atlas::math::Point p0 = find_min_bounds();
+        atlas::math::Point p1 = find_max_bounds();
+
+        bbox.x0 = p0.x;
+        bbox.y0 = p0.y;
+        bbox.z0 = p0.z;
+        bbox.x1 = p1.x;
+        bbox.y1 = p1.y;
+        bbox.z1 = p1.z;
+
+        // compute the number of grid cells in the x, y, and z directions
+
+        int num_objects = (int)objects.size();
+
+        // dimensions of the grid in the x, y, and z directions
+
+        double wx = p1.x - p0.x;
+        double wy = p1.y - p0.y;
+        double wz = p1.z - p0.z;
+
+        double multiplier = 2.0;  	// multiplyer scales the number of grid cells relative to the number of objects
+
+        double s = pow(wx * wy * wz / num_objects, 0.3333333);
+        nx = (int)(multiplier * wx / s + 1);
+        ny = (int)(multiplier * wy / s + 1);
+        nz = (int)(multiplier * wz / s + 1);
+
+        // set up the array of grid cells with null pointers
+
+        int num_cells = nx * ny * nz;
+        cells.reserve(num_objects);
+
+        for (int j = 0; j < num_cells; j++)
+            cells.push_back(NULL);
+
+        // set up a temporary array to hold the number of objects stored in each cell
+
+        std::vector<int> counts;
+        counts.reserve(num_cells);
+
+        for (int j = 0; j < num_cells; j++)
+            counts.push_back(0);
+
+
+        // put the objects into the cells
+
+        BBox obj_bBox; 	// object's bounding box
+        int index;  	// cell's array index
+
+        for (int j = 0; j < num_objects; j++) {
+            obj_bBox = objects[j]->get_bounding_box();
+
+            // compute the cell indices at the corners of the bounding box of the object
+
+            int ixmin = (int)clamp((obj_bBox.x0 - p0.x) * nx / (p1.x - p0.x), 0, nx - 1);
+            int iymin = (int)clamp((obj_bBox.y0 - p0.y) * ny / (p1.y - p0.y), 0, ny - 1);
+            int izmin = (int)clamp((obj_bBox.z0 - p0.z) * nz / (p1.z - p0.z), 0, nz - 1);
+            int ixmax = (int)clamp((obj_bBox.x1 - p0.x) * nx / (p1.x - p0.x), 0, nx - 1);
+            int iymax = (int)clamp((obj_bBox.y1 - p0.y) * ny / (p1.y - p0.y), 0, ny - 1);
+            int izmax = (int)clamp((obj_bBox.z1 - p0.z) * nz / (p1.z - p0.z), 0, nz - 1);
+
+            // add the object to the cells
+
+            for (int iz = izmin; iz <= izmax; iz++) 					// cells in z direction
+                for (int iy = iymin; iy <= iymax; iy++)					// cells in y direction
+                    for (int ix = ixmin; ix <= ixmax; ix++) {			// cells in x direction
+                        index = ix + nx * iy + nx * ny * iz;
+
+                        if (counts[index] == 0) {
+                            cells[index] = objects[j];
+                            counts[index] += 1;  						// now = 1
+                        }
+                        else {
+                            if (counts[index] == 1) {
+                                Compound* compound_ptr = new Compound;	// construct a compound object
+                                compound_ptr->add_object(cells[index]); // add object already in cell
+                                compound_ptr->add_object(objects[j]);  	// add the new object
+                                cells[index] = compound_ptr;			// store compound in current cell
+                                counts[index] += 1;  					// now = 2
+                            }
+                            else {										// counts[index] > 1
+                                ((Compound*)cells[index])->add_object(objects[j]);	// just add current object
+                                counts[index] += 1;						// for statistics only
+                            }
+                        }
+                    }
+        }  // end of for (int j = 0; j < num_objects; j++)
+
+
+        // erase the Compound::vector that stores the object pointers, but don't delete the objects
+
+        objects.erase(objects.begin(), objects.end());
+
+
+        // display some statistics on counts
+        // this is useful for finding out how many cells have no objects, one object, etc
+        // comment this out if you don't want to use it
+
+        int num_zeroes = 0;
+        int num_ones = 0;
+        int num_twos = 0;
+        int num_threes = 0;
+        int num_greater = 0;
+
+        for (int j = 0; j < num_cells; j++) {
+            if (counts[j] == 0)
+                num_zeroes += 1;
+            if (counts[j] == 1)
+                num_ones += 1;
+            if (counts[j] == 2)
+                num_twos += 1;
+            if (counts[j] == 3)
+                num_threes += 1;
+            if (counts[j] > 3)
+                num_greater += 1;
+        }
+
+        std::cout << "num_cells =" << num_cells << "\n";
+        std::cout << "numZeroes = " << num_zeroes << "  numOnes = " << num_ones << "  numTwos = " << num_twos << "\n";
+        std::cout << "numThrees = " << num_threes << "  numGreater = " << num_greater << "\n";
+
+        // erase the temporary counts vector
+
+        counts.erase(counts.begin(), counts.end());
+    }
+
+
+    virtual bool hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& t, ShadeRec& sr) const override {
+
+        //return Compound::hit(ray, t, sr);
+
+        double ox = ray.o.x;
+        double oy = ray.o.y;
+        double oz = ray.o.z;
+        double dx = ray.d.x;
+        double dy = ray.d.y;
+        double dz = ray.d.z;
+
+        double x0 = bbox.x0;
+        double y0 = bbox.y0;
+        double z0 = bbox.z0;
+        double x1 = bbox.x1;
+        double y1 = bbox.y1;
+        double z1 = bbox.z1;
+
+        double tx_min, ty_min, tz_min;
+        double tx_max, ty_max, tz_max;
+
+        // the following code includes modifications from Shirley and Morley (2003)
+
+        double a = 1.0 / dx;
+        if (a >= 0) {
+            tx_min = (x0 - ox) * a;
+            tx_max = (x1 - ox) * a;
+        }
+        else {
+            tx_min = (x1 - ox) * a;
+            tx_max = (x0 - ox) * a;
+        }
+
+        double b = 1.0 / dy;
+        if (b >= 0) {
+            ty_min = (y0 - oy) * b;
+            ty_max = (y1 - oy) * b;
+        }
+        else {
+            ty_min = (y1 - oy) * b;
+            ty_max = (y0 - oy) * b;
+        }
+
+        double c = 1.0 / dz;
+        if (c >= 0) {
+            tz_min = (z0 - oz) * c;
+            tz_max = (z1 - oz) * c;
+        }
+        else {
+            tz_min = (z1 - oz) * c;
+            tz_max = (z0 - oz) * c;
+        }
+
+        double t0, t1;
+
+        if (tx_min > ty_min)
+            t0 = tx_min;
+        else
+            t0 = ty_min;
+
+        if (tz_min > t0)
+            t0 = tz_min;
+
+        if (tx_max < ty_max)
+            t1 = tx_max;
+        else
+            t1 = ty_max;
+
+        if (tz_max < t1)
+            t1 = tz_max;
+
+        if (t0 > t1)
+            return(false);
+
+
+        // initial cell coordinates
+
+        int ix, iy, iz;
+
+        if (bbox.inside(ray.o)) {  			// does the ray start inside the grid?
+            ix = (int)(clamp((ox - x0) * nx / (x1 - x0), 0, nx - 1));
+            iy = (int)(clamp((oy - y0) * ny / (y1 - y0), 0, ny - 1));
+            iz = (int)(clamp((oz - z0) * nz / (z1 - z0), 0, nz - 1));
+        }
+        else {
+            atlas::math::Vector p = ray.o + (float)t0 * ray.d;  // initial hit point with grid's bounding box
+            ix = (int)(clamp((p.x - x0) * nx / (x1 - x0), 0, nx - 1));
+            iy = (int)(clamp((p.y - y0) * ny / (y1 - y0), 0, ny - 1));
+            iz = (int)(clamp((p.z - z0) * nz / (z1 - z0), 0, nz - 1));
+        }
+
+        // ray parameter increments per cell in the x, y, and z directions
+
+        double dtx = (tx_max - tx_min) / nx;
+        double dty = (ty_max - ty_min) / ny;
+        double dtz = (tz_max - tz_min) / nz;
+
+        double 	tx_next, ty_next, tz_next;
+        int 	ix_step, iy_step, iz_step;
+        int 	ix_stop, iy_stop, iz_stop;
+
+        if (dx > 0) {
+            tx_next = tx_min + (ix + 1) * dtx;
+            ix_step = +1;
+            ix_stop = nx;
+        }
+        else {
+            tx_next = tx_min + (nx - ix) * dtx;
+            ix_step = -1;
+            ix_stop = -1;
+        }
+
+        if (dx == 0.0) {
+            tx_next = kHugeValue;
+            ix_step = -1;
+            ix_stop = -1;
+        }
+
+
+        if (dy > 0) {
+            ty_next = ty_min + (iy + 1) * dty;
+            iy_step = +1;
+            iy_stop = ny;
+        }
+        else {
+            ty_next = ty_min + (ny - iy) * dty;
+            iy_step = -1;
+            iy_stop = -1;
+        }
+
+        if (dy == 0.0) {
+            ty_next = kHugeValue;
+            iy_step = -1;
+            iy_stop = -1;
+        }
+
+        if (dz > 0) {
+            tz_next = tz_min + (iz + 1) * dtz;
+            iz_step = +1;
+            iz_stop = nz;
+        }
+        else {
+            tz_next = tz_min + (nz - iz) * dtz;
+            iz_step = -1;
+            iz_stop = -1;
+        }
+
+        if (dz == 0.0) {
+            tz_next = kHugeValue;
+            iz_step = -1;
+            iz_stop = -1;
+        }
+
+        //printf("travese grid\n");
+        // traverse the grid
+
+        while (true) {
+            Shape* object_ptr = cells[ix + nx * iy + nx * ny * iz];
+            if (tx_next < ty_next && tx_next < tz_next) {
+                if (object_ptr && object_ptr->hit(ray, t, sr) && t < tx_next) {
+                    mMaterial = object_ptr->getMaterial();
+                    return (true);
+                }
+
+                tx_next += dtx;
+                ix += ix_step;
+
+                if (ix == ix_stop)
+                    return (false);
+            }
+            else {
+                if (ty_next < tz_next) {
+                    if (object_ptr && object_ptr->hit(ray, t, sr) && t < ty_next) {
+                        mMaterial = object_ptr->getMaterial();
+                        return (true);
+                    }
+
+                    ty_next += dty;
+                    iy += iy_step;
+
+                    if (iy == iy_stop)
+                        return (false);
+                }
+                else {
+                    if (object_ptr && object_ptr->hit(ray, t, sr) && t < tz_next) {
+                        mMaterial = object_ptr->getMaterial();
+                        return (true);
+                    }
+
+                    tz_next += dtz;
+                    iz += iz_step;
+
+                    if (iz == iz_stop)
+                        return (false);
+                }
+            }
+        }
+    }
+
+    virtual bool shadow_hit(atlas::math::Ray<atlas::math::Vector> const & ray, float& t) const {
+
+        //return Compound::shadow_hit(ray, t);
+
+        double ox = ray.o.x;
+        double oy = ray.o.y;
+        double oz = ray.o.z;
+        double dx = ray.d.x;
+        double dy = ray.d.y;
+        double dz = ray.d.z;
+
+        double x0 = bbox.x0;
+        double y0 = bbox.y0;
+        double z0 = bbox.z0;
+        double x1 = bbox.x1;
+        double y1 = bbox.y1;
+        double z1 = bbox.z1;
+
+        double tx_min, ty_min, tz_min;
+        double tx_max, ty_max, tz_max;
+
+        // the following code includes modifications from Shirley and Morley (2003)
+
+        double a = 1.0 / dx;
+        if (a >= 0) {
+            tx_min = (x0 - ox) * a;
+            tx_max = (x1 - ox) * a;
+        }
+        else {
+            tx_min = (x1 - ox) * a;
+            tx_max = (x0 - ox) * a;
+        }
+
+        double b = 1.0 / dy;
+        if (b >= 0) {
+            ty_min = (y0 - oy) * b;
+            ty_max = (y1 - oy) * b;
+        }
+        else {
+            ty_min = (y1 - oy) * b;
+            ty_max = (y0 - oy) * b;
+        }
+
+        double c = 1.0 / dz;
+        if (c >= 0) {
+            tz_min = (z0 - oz) * c;
+            tz_max = (z1 - oz) * c;
+        }
+        else {
+            tz_min = (z1 - oz) * c;
+            tz_max = (z0 - oz) * c;
+        }
+
+        double t0, t1;
+
+        if (tx_min > ty_min)
+            t0 = tx_min;
+        else
+            t0 = ty_min;
+
+        if (tz_min > t0)
+            t0 = tz_min;
+
+        if (tx_max < ty_max)
+            t1 = tx_max;
+        else
+            t1 = ty_max;
+
+        if (tz_max < t1)
+            t1 = tz_max;
+
+        if (t0 > t1)
+            return(false);
+
+
+        // initial cell coordinates
+
+        int ix, iy, iz;
+
+        if (bbox.inside(ray.o)) {  			// does the ray start inside the grid?
+            ix = (int)(clamp((ox - x0) * nx / (x1 - x0), 0, nx - 1));
+            iy = (int)(clamp((oy - y0) * ny / (y1 - y0), 0, ny - 1));
+            iz = (int)(clamp((oz - z0) * nz / (z1 - z0), 0, nz - 1));
+        }
+        else {
+            atlas::math::Vector p = ray.o + (float)t0 * ray.d;  // initial hit point with grid's bounding box
+            ix = (int)(clamp((p.x - x0) * nx / (x1 - x0), 0, nx - 1));
+            iy = (int)(clamp((p.y - y0) * ny / (y1 - y0), 0, ny - 1));
+            iz = (int)(clamp((p.z - z0) * nz / (z1 - z0), 0, nz - 1));
+        }
+        
+        // ray parameter increments per cell in the x, y, and z directions
+
+        double dtx = (tx_max - tx_min) / nx;
+        double dty = (ty_max - ty_min) / ny;
+        double dtz = (tz_max - tz_min) / nz;
+
+        double 	tx_next, ty_next, tz_next;
+        int 	ix_step, iy_step, iz_step;
+        int 	ix_stop, iy_stop, iz_stop;
+
+        if (dx > 0) {
+            tx_next = tx_min + (ix + 1) * dtx;
+            ix_step = +1;
+            ix_stop = nx;
+        }
+        else {
+            tx_next = tx_min + (nx - ix) * dtx;
+            ix_step = -1;
+            ix_stop = -1;
+        }
+
+        if (dx == 0.0) {
+            tx_next = kHugeValue;
+            ix_step = -1;
+            ix_stop = -1;
+        }
+
+
+        if (dy > 0) {
+            ty_next = ty_min + (iy + 1) * dty;
+            iy_step = +1;
+            iy_stop = ny;
+        }
+        else {
+            ty_next = ty_min + (ny - iy) * dty;
+            iy_step = -1;
+            iy_stop = -1;
+        }
+
+        if (dy == 0.0) {
+            ty_next = kHugeValue;
+            iy_step = -1;
+            iy_stop = -1;
+        }
+
+        if (dz > 0) {
+            tz_next = tz_min + (iz + 1) * dtz;
+            iz_step = +1;
+            iz_stop = nz;
+        }
+        else {
+            tz_next = tz_min + (nz - iz) * dtz;
+            iz_step = -1;
+            iz_stop = -1;
+        }
+
+        if (dz == 0.0) {
+            tz_next = kHugeValue;
+            iz_step = -1;
+            iz_stop = -1;
+        }
+
+
+        // traverse the grid
+
+        while (true) {
+            Shape* object_ptr = cells[ix + nx * iy + nx * ny * iz];
+
+            if (tx_next < ty_next && tx_next < tz_next) {
+                if (object_ptr && object_ptr->shadow_hit(ray, t) && t < tx_next) {
+                    //material_ptr = object_ptr->get_material();
+                    return (true);
+                }
+
+                tx_next += dtx;
+                ix += ix_step;
+
+                if (ix == ix_stop)
+                    return (false);
+            }
+            else {
+                if (ty_next < tz_next) {
+                    if (object_ptr && object_ptr->shadow_hit(ray, t) && t < ty_next) {
+                        //material_ptr = object_ptr->get_material();
+                        return (true);
+                    }
+
+                    ty_next += dty;
+                    iy += iy_step;
+
+                    if (iy == iy_stop)
+                        return (false);
+                }
+                else {
+                    if (object_ptr && object_ptr->shadow_hit(ray, t) && t < tz_next) {
+                        //material_ptr = object_ptr->get_material();
+                        return (true);
+                    }
+
+                    tz_next += dtz;
+                    iz += iz_step;
+
+                    if (iz == iz_stop)
+                        return (false);
+                }
+            }
+        }
+    }
+
+    void reverse_mesh_normals(void) {
+        reverse_normal = true;
+    }
+
+    void tessellate_flat_sphere(const int horizontal_steps, const int vertical_steps) {
+	    double pi = 3.1415926535897932384;
+        int k = 1;
+
+        for (int j = 0; j <= horizontal_steps - 1; j++) {
+            // define vertices
+
+            atlas::math::Point v0(0, 1, 0);																		// top (north pole)
+
+            atlas::math::Point v1(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 			// bottom left
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            atlas::math::Point v2(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps), 		// bottom  right
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            Triangle* triangle_ptr = new Triangle(v0, v1, v2);
+            objects.push_back(triangle_ptr);
+        }
+
+
+        // define the bottom triangles which all touch the south pole
+
+        k = vertical_steps - 1;
+
+        for (int j = 0; j <= horizontal_steps - 1; j++) {
+            // define vertices
+
+            atlas::math::Point v0(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 			// top left
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            atlas::math::Point v1(0, -1, 0);																		// bottom (south pole)		
+
+            atlas::math::Point v2(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps), 		// top right 
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            Triangle* triangle_ptr = new Triangle(v0, v1, v2);
+            objects.push_back(triangle_ptr);
+        }
+
+
+
+        //  define the other triangles
+
+        for (k = 1; k <= vertical_steps - 2; k++) {
+            for (int j = 0; j <= horizontal_steps - 1; j++) {
+                // define the first triangle
+
+                // vertices
+
+                atlas::math::Point v0(sin(2.0 * pi * j / horizontal_steps) * sin(pi * (k + 1) / vertical_steps), 				// bottom left, use k + 1, j
+                    cos(pi * (k + 1) / vertical_steps),
+                    cos(2.0 * pi * j / horizontal_steps) * sin(pi * (k + 1) / vertical_steps));
+
+                atlas::math::Point v1(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps), 		// bottom  right, use k + 1, j + 1
+                    cos(pi * (k + 1) / vertical_steps),
+                    cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps));
+
+                atlas::math::Point v2(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 					// top left, 	use k, j
+                    cos(pi * k / vertical_steps),
+                    cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+                Triangle* triangle_ptr1 = new Triangle(v0, v1, v2);
+                objects.push_back(triangle_ptr1);
+
+
+                // define the second triangle
+
+                // vertices
+
+                v0 = atlas::math::Point(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps), 			// top right, use k, j + 1
+                    cos(pi * k / vertical_steps),
+                    cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps));
+
+                v1 = atlas::math::Point(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 				// top left, 	use k, j
+                    cos(pi * k / vertical_steps),
+                    cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+                v2 = atlas::math::Point(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps), 	// bottom  right, use k + 1, j + 1
+                    cos(pi * (k + 1) / vertical_steps),
+                    cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps));
+
+                Triangle* triangle_ptr2 = new Triangle(v0, v1, v2);
+                objects.push_back(triangle_ptr2);
+            }
+        }
+
+	}	
+
+    /*
+    void tessellate_smooth_sphere(const int horizontal_steps, const int vertical_steps) {
+        double pi = 3.1415926535897932384;
+
+        // define the top triangles
+
+        int k = 1;
+
+        for (int j = 0; j <= horizontal_steps - 1; j++) {
+            // define vertices
+
+            atlas::math::Point v0(0, 1, 0);																		// top
+
+            atlas::math::Point v1(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 			// bottom left
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            atlas::math::Point v2(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps), 		// bottom  right
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            SmoothTriangle* triangle_ptr = new SmoothTriangle(v0, v1, v2);
+            triangle_ptr->n0 = v0;
+            triangle_ptr->n1 = v1;
+            triangle_ptr->n2 = v2;
+            objects.push_back(triangle_ptr);
+        }
+
+
+        // define the bottom triangles
+
+        k = vertical_steps - 1;
+
+        for (int j = 0; j <= horizontal_steps - 1; j++) {
+            // define vertices
+
+            atlas::math::Point v0(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 			// top left
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            atlas::math::Point v1(0, -1, 0);																		// bottom			
+
+            atlas::math::Point v2(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps), 		// top right 
+                cos(pi * k / vertical_steps),
+                cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps));
+
+            SmoothTriangle* triangle_ptr = new SmoothTriangle(v0, v1, v2);
+            triangle_ptr->n0 = v0;
+            triangle_ptr->n1 = v1;
+            triangle_ptr->n2 = v2;
+            objects.push_back(triangle_ptr);
+        }
+
+
+        //  define the other triangles
+
+        for (int k = 1; k <= vertical_steps - 2; k++) {
+            for (int j = 0; j <= horizontal_steps - 1; j++) {
+                // define the first triangle
+
+                // vertices
+
+                atlas::math::Point v0(sin(2.0 * pi * j / horizontal_steps) * sin(pi * (k + 1) / vertical_steps), 				// bottom left, use k + 1, j
+                    cos(pi * (k + 1) / vertical_steps),
+                    cos(2.0 * pi * j / horizontal_steps) * sin(pi * (k + 1) / vertical_steps));
+
+                atlas::math::Point v1(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps), 		// bottom  right, use k + 1, j + 1
+                    cos(pi * (k + 1) / vertical_steps),
+                    cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps));
+
+                atlas::math::Point v2(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 					// top left, 	use k, j
+                    cos(pi * k / vertical_steps),
+                    cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+                SmoothTriangle* triangle_ptr1 = new SmoothTriangle(v0, v1, v2);
+                triangle_ptr1->n0 = v0;
+                triangle_ptr1->n1 = v1;
+                triangle_ptr1->n2 = v2;
+                objects.push_back(triangle_ptr1);
+
+
+                // define the second triangle
+
+                // vertices
+
+                v0 = atlas::math::Point(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps), 			// top right, use k, j + 1
+                    cos(pi * k / vertical_steps),
+                    cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * k / vertical_steps));
+
+                v1 = atlas::math::Point(sin(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps), 				// top left, 	use k, j
+                    cos(pi * k / vertical_steps),
+                    cos(2.0 * pi * j / horizontal_steps) * sin(pi * k / vertical_steps));
+
+                v2 = atlas::math::Point(sin(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps), 	// bottom  right, use k + 1, j + 1
+                    cos(pi * (k + 1) / vertical_steps),
+                    cos(2.0 * pi * (j + 1) / horizontal_steps) * sin(pi * (k + 1) / vertical_steps));
+
+                SmoothTriangle* triangle_ptr2 = new SmoothTriangle(v0, v1, v2);
+                triangle_ptr2->n0 = v0;
+                triangle_ptr2->n1 = v1;
+                triangle_ptr2->n2 = v2;
+                objects.push_back(triangle_ptr2);
+            }
+        }
+    }
+
+    */
+    //	virtual void
+    //	set_material(Material* mat_ptr);
+
+//void read_flat_triangles(char* file_name);
+    //void set_material(std::shared_ptr<Material> mat_ptr) {
+    //	int num_cells = (int)cells.size();
+   	//    for (int j = 0; num_cells; j++) {
+    //		if (cells[j])
+    //			cells[j]->setMaterial(mat_ptr);
+    //	}
+    //}
+
+private:
+    std::vector<Shape*> cells;		// 1D array
+    BBox bbox;
+    int nx, ny, nz;			// number of cells in the x, y, and z directions
+    Mesh* mesh_ptr;		// holds triangle data
+    bool reverse_normal;
+    
+};
+
+class Matrix {
+public:
+    double	m[4][4];								// elements
+
+    Matrix(void) {
+        for (int x = 0; x < 4; x++)
+            for (int y = 0; y < 4; y++) {
+                if (x == y)
+                    m[x][y] = 1.0;
+                else
+                    m[x][y] = 0.0;
+            }
+    }									// default constructor
+
+    Matrix(const Matrix& mat) {
+        for (int x = 0; x < 4; x++)
+            for (int y = 0; y < 4; y++)
+                m[x][y] = mat.m[x][y];
+    }						// copy constructor
+
+    ~Matrix(void) {}								// destructor
+
+    Matrix& 										// assignment operator
+        operator= (const Matrix& rhs) {
+        if (this == &rhs)
+            return (*this);
+
+        for (int x = 0; x < 4; x++)
+            for (int y = 0; y < 4; y++)
+                m[x][y] = rhs.m[x][y];
+
+        return (*this);
+    }
+
+    Matrix 											// multiplication of two matrices
+        operator* (const Matrix& mat) const {
+        Matrix 	product;
+
+        for (int y = 0; y < 4; y++)
+            for (int x = 0; x < 4; x++) {
+                double sum = 0.0;
+
+                for (int j = 0; j < 4; j++)
+                    sum += m[x][j] * mat.m[j][y];
+
+                product.m[x][y] = sum;
+            }
+
+        return (product);
+    }
+
+    Matrix scalar_mult(const double d) {
+        for (int x = 0; x < 4; x++)
+            for (int y = 0; y < 4; y++)
+                m[x][y] = m[x][y] * d;
+
+        return (*this);
+    }
+
+    Matrix 											// divsion by a double
+        operator/ (const double d) {
+        for (int x = 0; x < 4; x++)
+            for (int y = 0; y < 4; y++)
+                m[x][y] = m[x][y] / d;
+
+        return (*this);
+    }
+
+    void											// set to the identity matrix
+        set_identity(void) {
+        for (int x = 0; x < 4; x++)
+            for (int y = 0; y < 4; y++) {
+                if (x == y)
+                    m[x][y] = 1.0;
+                else
+                    m[x][y] = 0.0;
+            }
+    }
+};
+
+
+atlas::math::Point
+operator* (const Matrix& mat, const atlas::math::Point& p) {
+    return (atlas::math::Point(mat.m[0][0] * p.x + mat.m[0][1] * p.y + mat.m[0][2] * p.z + mat.m[0][3],
+        mat.m[1][0] * p.x + mat.m[1][1] * p.y + mat.m[1][2] * p.z + mat.m[1][3],
+        mat.m[2][0] * p.x + mat.m[2][1] * p.y + mat.m[2][2] * p.z + mat.m[2][3]));
+}
+
+
+class Instance : public Shape {
+public:
+
+    Instance(void) : Shape(),
+        object_ptr(NULL),
+        inv_matrix(),
+        transform_the_texture(false),
+        bbox(-1, 1, -1, 1, -1, 1) {}
+
+
+    Instance(const Shape* obj_ptr) : Shape(),
+        object_ptr(obj_ptr),
+        bbox(obj_ptr->get_bounding_box()) {}
+
+
+    Instance(const Instance& instance) : Shape(),
+        object_ptr(instance.object_ptr),
+        inv_matrix(instance.inv_matrix),
+        transform_the_texture(instance.transform_the_texture),
+        bbox(instance.bbox) {}
+
+
+    Instance& operator=(const Instance& instance) {
+        if (this == &instance)
+            return (*this);
+
+        Shape::operator= (instance);
+
+        object_ptr = instance.object_ptr;
+        inv_matrix = instance.inv_matrix;
+        transform_the_texture = instance.transform_the_texture;
+        bbox = instance.bbox;
+
+        return (*this);
+    }
+    virtual std::shared_ptr<Shape> clone(void) const {
+        return(std::make_shared<Instance>(*this));
+    }
+
+    void compute_bounding_box(void);
+
+    virtual BBox get_bounding_box(void) const {
+        return bbox;
+    }
+
+    virtual bool shadow_hit(atlas::math::Ray<atlas::math::Vector> const & ray, float& tmin) const override{
+        atlas::math::Ray<atlas::math::Vector> inv_ray(ray);
+        inv_ray.o = inv_matrix * inv_ray.o;
+        inv_ray.d = inv_matrix * inv_ray.d;
+
+        if (object_ptr->shadow_hit(inv_ray, tmin)) {
+            //sr.normal = inv_matrix * sr.normal;
+            //sr.normal.normalize();
+
+            // if object has material, use that
+            if (object_ptr->getMaterial())
+                mMaterial = object_ptr->getMaterial();
+
+            //		if (!transform_the_texture)
+            //			sr.local_hit_point = ray.o + t * ray.d;
+
+            return (true);
+        }
+        return (false);
+
+    }
+
+    virtual bool hit(atlas::math::Ray<atlas::math::Vector> const & ray, double& tmin, ShadeRec& sr) const override{
+        atlas::math::Ray<atlas::math::Vector> inv_ray(ray);
+        inv_ray.o = inv_matrix * inv_ray.o;
+        inv_ray.d = inv_matrix * inv_ray.d;
+
+        //	Box* box_ptr = box;
+        //	
+        //	if (box->hit(ray, tmin, sr)) {
+        //		//sr.normal = sr.normal;
+        //		sr.normal.normalize();
+        //		
+        //		material_ptr = box->get_material();
+        //		
+        //		//sr.local_hit_point = ray.o + tmin * ray.d;
+        //		
+        //		return true;
+        //	}
+
+        if (object_ptr->hit(inv_ray, tmin, sr)) {
+            sr.normal = inv_matrix * sr.normal;
+            normalize(sr.normal);
+
+            // if object has material, use that
+            if (object_ptr->getMaterial()) {
+                mMaterial = object_ptr->getMaterial();
+               // printf("hit with material!\n");
+            }
+
+            if (!transform_the_texture)
+                sr.local_hit_point = ray.o + (float)tmin * ray.d;
+
+            return (true);
+        }
+        return (false);
+    }
+    void Instance::translate(const atlas::math::Vector& trans) {
+
+        Matrix inv_translation_matrix;				// temporary inverse translation matrix	
+
+        inv_translation_matrix.m[0][3] = -trans.x;
+        inv_translation_matrix.m[1][3] = -trans.y;
+        inv_translation_matrix.m[2][3] = -trans.z;
+
+        inv_matrix = inv_matrix * inv_translation_matrix;
+
+        Matrix translation_matrix;					// temporary translation matrix	
+
+        translation_matrix.m[0][3] = trans.x;
+        translation_matrix.m[1][3] = trans.y;
+        translation_matrix.m[2][3] = trans.z;
+
+        forward_matrix = translation_matrix * forward_matrix;
+    }
+
+    void translate(const float dx, const float dy, const float dz) {
+        Matrix inv_translation_matrix;	//temp inverse translation matrix
+        Matrix translation_matrix;	// temp translation matrix
+
+        inv_translation_matrix.m[0][3] = -dx;
+        inv_translation_matrix.m[1][3] = -dy;
+        inv_translation_matrix.m[2][3] = -dz;
+
+        // post-multiply for inverse trans
+        inv_matrix = inv_matrix * inv_translation_matrix;
+
+        translation_matrix.m[0][3] = dx;
+        translation_matrix.m[1][3] = dy;
+        translation_matrix.m[2][3] = dz;
+
+        forward_matrix = translation_matrix * forward_matrix;	// pre-multiply
+    }
+
+    void rotate_x(const float theta) {
+        float radians = theta * (float)0.017453292;
+
+        Matrix inv_rotation_matrix;	//temp inverse rotation matrix
+        Matrix rotation_matrix;	// temp rotation matrix
+
+        inv_rotation_matrix.m[1][1] = cos(radians);
+        inv_rotation_matrix.m[1][2] = sin(radians);
+        inv_rotation_matrix.m[2][1] = -sin(radians);
+        inv_rotation_matrix.m[2][2] = cos(radians);
+
+        // post multiply
+        inv_matrix = inv_matrix * inv_rotation_matrix;
+
+        rotation_matrix.m[1][1] = cos(radians);
+        rotation_matrix.m[1][2] = -sin(radians);
+        rotation_matrix.m[2][1] = sin(radians);
+        rotation_matrix.m[2][2] = cos(radians);
+
+        // pre-multiply
+        forward_matrix = rotation_matrix * forward_matrix;
+    };
+
+    void
+        rotate_y(const float theta) {
+
+        float radians = theta * (float)0.017453292;
+
+        Matrix inv_rotation_matrix;	//temp inverse rotation matrix
+        Matrix rotation_matrix;	// temp rotation matrix
+
+        inv_rotation_matrix.m[0][0] = cos(radians);
+        inv_rotation_matrix.m[0][2] = -sin(radians);
+        inv_rotation_matrix.m[2][0] = sin(radians);
+        inv_rotation_matrix.m[2][2] = cos(radians);
+
+        // post multiply
+        inv_matrix = inv_matrix * inv_rotation_matrix;
+
+        rotation_matrix.m[0][0] = cos(radians);
+        rotation_matrix.m[0][2] = sin(radians);
+        rotation_matrix.m[2][0] = -sin(radians);
+        rotation_matrix.m[2][2] = cos(radians);
+
+        // pre-multiply
+        forward_matrix = rotation_matrix * forward_matrix;
+    };
+
+    void
+        rotate_z(const float theta) {
+
+        float radians = theta * (float)0.017453292;
+
+        Matrix inv_rotation_matrix;	//temp inverse rotation matrix
+        Matrix rotation_matrix;	// temp rotation matrix
+
+        inv_rotation_matrix.m[0][0] = cos(radians);
+        inv_rotation_matrix.m[0][1] = sin(radians);
+        inv_rotation_matrix.m[1][0] = -sin(radians);
+        inv_rotation_matrix.m[1][1] = cos(radians);
+
+        // post multiply
+        inv_matrix = inv_matrix * inv_rotation_matrix;
+
+        rotation_matrix.m[0][0] = cos(radians);
+        rotation_matrix.m[0][1] = -sin(radians);
+        rotation_matrix.m[1][0] = sin(radians);
+        rotation_matrix.m[1][1] = cos(radians);
+
+        // pre-multiply
+        forward_matrix = rotation_matrix * forward_matrix;
+    };
+
+    void
+        shear(const float xy, const float xz, const float yx, const float yz, const float zx, const float zy) {
+
+        Matrix inv_shear_matrix;  // temp inverse shear matrix
+        Matrix shear_matrix;	// temp sheer matrix
+
+        inv_shear_matrix.m[0][0] = 1 - yz * zy;
+        inv_shear_matrix.m[0][1] = -yx + yz * zx;
+        inv_shear_matrix.m[0][2] = -zx + yx * zy;
+        inv_shear_matrix.m[1][0] = -xy + xz * zy;
+        inv_shear_matrix.m[1][1] = 1 - xz * zx;
+        inv_shear_matrix.m[1][2] = -zy + xy * zx;
+        inv_shear_matrix.m[2][0] = -xz + xy * yz;
+        inv_shear_matrix.m[2][1] = -yz + xz * yx;
+        inv_shear_matrix.m[2][2] = 1 - xy * yx;
+
+        float inv_determinant = 1 / (1 - xy * yx - xz * zx - yz * zy + xy * yz * zx + xz * yx * zy);
+
+        // post multiply
+        inv_matrix = inv_matrix * (inv_shear_matrix.scalar_mult(inv_determinant));
+
+        shear_matrix.m[0][1] = yx;
+        shear_matrix.m[0][2] = zx;
+        shear_matrix.m[1][0] = xy;
+        shear_matrix.m[1][2] = zy;
+        shear_matrix.m[2][0] = xz;
+        shear_matrix.m[2][1] = yz;
+
+        // pre-multiply
+        forward_matrix = shear_matrix * forward_matrix;
+    }
+
+
+    void
+        scale(const float x_scale, const float y_scale, const float z_scale) {
+
+        Matrix inv_scale_matrix;	// temp inverse scale matrix
+        Matrix scale_matrix;	// temp scale matrix
+
+        inv_scale_matrix.m[0][0] = 1 / x_scale;
+        inv_scale_matrix.m[1][1] = 1 / y_scale;
+        inv_scale_matrix.m[2][2] = 1 / z_scale;
+
+        // post-multiply
+        inv_matrix = inv_matrix * inv_scale_matrix;
+
+        scale_matrix.m[0][0] = x_scale;
+        scale_matrix.m[1][1] = y_scale;
+        scale_matrix.m[2][2] = z_scale;
+
+        // pre multiply
+        forward_matrix = scale_matrix * forward_matrix;
+    }
+
+    void scale(const float s) {
+        scale(s, s, s);
+    }
+
+    void reflect_across_x_axis() {
+
+        Matrix inv_reflect_matrix;	// temp inverse reflect matrix
+        Matrix reflect_matrix;	// temp reflect matrix
+
+        inv_reflect_matrix.m[0][0] = -1;
+
+        // post multiply
+        inv_matrix = inv_matrix * inv_reflect_matrix;
+
+        reflect_matrix.m[1][1] = -1;
+        reflect_matrix.m[2][2] = -1;
+
+        // pre-multiply
+        forward_matrix = reflect_matrix * forward_matrix;
+    }
+
+    void
+        reflect_across_y_axis() {
+        Matrix inv_reflect_matrix;	// temp inverse reflect matrix
+        Matrix reflect_matrix;	// temp reflect matrix
+
+        inv_reflect_matrix.m[1][1] = -1;
+
+        // post multiply
+        inv_matrix = inv_matrix * inv_reflect_matrix;
+
+        reflect_matrix.m[0][0] = -1;
+        reflect_matrix.m[2][2] = -1;
+
+        // pre-multiply
+        forward_matrix = reflect_matrix * forward_matrix;
+    }
+
+
+    void
+        reflect_across_z_axis() {
+        Matrix inv_reflect_matrix;	// temp inverse reflect matrix
+        Matrix reflect_matrix;	// temp reflect matrix
+
+        inv_reflect_matrix.m[2][2] = -1;
+
+        // post multiply
+        inv_matrix = inv_matrix * inv_reflect_matrix;
+
+        reflect_matrix.m[0][0] = -1;
+        reflect_matrix.m[1][1] = -1;
+
+        // pre-multiply
+        forward_matrix = reflect_matrix * forward_matrix;
+    }
+
+
+    void
+        transform_texture(const bool trans) {
+        transform_the_texture = trans;
+    }
+    void
+        Instance::set_material(std::shared_ptr<Material> m_ptr) {
+        mMaterial = m_ptr;
+    }
+  
+private:
+
+    const Shape* object_ptr;	// object we're transforming
+    Matrix inv_matrix;					// inverse of the matrix we're transforming the object with
+    bool transform_the_texture;			// whether or not to transform the texture
+
+    static Matrix forward_matrix;		// transformation matrix
+    BBox bbox;							//bounding box
+    //Box* box;
+};
+
+
+
+
+
+
+
+
+
